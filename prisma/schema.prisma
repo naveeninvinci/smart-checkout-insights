@@ -9,26 +9,64 @@ generator client {
 // enough when changing adapters.
 // See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
 datasource db {
-  provider = "sqlite"
-  url      = "file:dev.sqlite"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
-model Session {
-  id                  String    @id
-  shop                String
-  state               String
-  isOnline            Boolean   @default(false)
-  scope               String?
-  expires             DateTime?
-  accessToken         String
-  userId              BigInt?
-  firstName           String?
-  lastName            String?
-  email               String?
-  accountOwner        Boolean   @default(false)
-  locale              String?
-  collaborator        Boolean?  @default(false)
-  emailVerified       Boolean?  @default(false)
-  refreshToken        String?
-  refreshTokenExpires DateTime?
+model Shop {
+  id          String   @id @default(cuid())
+  shopDomain  String   @unique
+  accessToken String
+  installedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  webhookEvents WebhookEvent[]
+  checkoutEvents CheckoutEvent[]
+  orderEvents    OrderEvent[]
+}
+
+model WebhookEvent {
+  id        String   @id @default(cuid())
+  shopId    String
+  topic     String
+  payload   Json
+  webhookId String?  @unique
+  createdAt DateTime @default(now())
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, topic, createdAt])
+}
+
+model CheckoutEvent {
+  id            String   @id @default(cuid())
+  shopId        String
+  checkoutToken String
+  eventType     String   // "checkouts/create" | "checkouts/update"
+  currency      String?
+  value         Decimal? @db.Decimal(10, 2)
+  country       String?
+  device        String?
+  lineItems     Json?
+  createdAt     DateTime @default(now())
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, checkoutToken, createdAt])
+  @@index([shopId, eventType, createdAt])
+}
+
+model OrderEvent {
+  id            String   @id @default(cuid())
+  shopId        String
+  orderId       String   @unique
+  checkoutToken String?
+  currency      String?
+  totalPrice    Decimal? @db.Decimal(10, 2)
+  createdAt     DateTime @default(now())
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, createdAt])
 }
