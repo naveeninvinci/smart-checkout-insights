@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: sci-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: sci
+    volumes:
+      - sci_pgdata:/var/lib/postgresql/data
+
+volumes:
+  sci_pgdata:
