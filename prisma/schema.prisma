@@ -64,6 +64,7 @@ model OrderEvent {
   checkoutToken String?
   currency      String?
   totalPrice    Decimal? @db.Decimal(10, 2)
+  lineItems     Json?
   createdAt     DateTime @default(now())
 
   shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)

@@ -1,284 +1,417 @@
-import { useEffect } from "react";
-import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { useFetcher, Link as RemixLink } from "@remix-run/react";
+import type { LoaderFunctionArgs } from "@remix-run/node";
+import { json } from "@remix-run/node";
+import { useLoaderData } from "@remix-run/react";
 import {
   Page,
   Layout,
-  Text,
   Card,
-  Button,
+  Text,
   BlockStack,
-  Box,
-  List,
-  Link,
   InlineStack,
-  Divider,
+  DataTable,
 } from "@shopify/polaris";
-import { TitleBar, useAppBridge } from "@shopify/app-bridge-react";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
+import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
+
+function isWithinLastHours(date: Date, hours: number) {
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  return diffMs <= hours * 60 * 60 * 1000;
+}
+
+function isWithinLastDays(date: Date, days: number) {
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  return diffMs <= days * 24 * 60 * 60 * 1000;
+}
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
-  return null;
-};
 
-export const action = async ({ request }: ActionFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
+  const orders = await prisma.orderEvent.findMany({
+    orderBy: { createdAt: "desc" },
+  });
 
-  const color = ["Red", "Orange", "Yellow", "Green"][Math.floor(Math.random() * 4)];
+  const totalOrders = orders.length;
 
-  const response = await admin.graphql(
-    `#graphql
-      mutation populateProduct($product: ProductCreateInput!) {
-        productCreate(product: $product) {
-          product {
-            id
-            title
-            handle
-            status
-            variants(first: 10) {
-              edges {
-                node {
-                  id
-                  price
-                  barcode
-                  createdAt
-                }
-              }
-            }
-          }
-        }
-      }`,
-    { variables: { product: { title: `${color} Snowboard` } } },
+  const totalRevenue = orders.reduce((sum, order) => {
+    return sum + Number(order.totalPrice ?? 0);
+  }, 0);
+
+  const averageOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
+
+  const latestOrder = orders[0] ?? null;
+
+  const ordersLast24h = orders.filter((order) =>
+    isWithinLastHours(new Date(order.createdAt), 24),
   );
 
-  const responseJson = await response.json();
-  const product = responseJson.data!.productCreate!.product!;
-  const variantId = product.variants.edges[0]!.node!.id!;
+  const ordersLast7d = orders.filter((order) =>
+    isWithinLastDays(new Date(order.createdAt), 7),
+  );
 
-  const variantResponse = await admin.graphql(
-    `#graphql
-    mutation shopifyRemixTemplateUpdateVariant($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-      productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-        productVariants {
-          id
-          price
-          barcode
-          createdAt
-        }
+  const ordersLast30d = orders.filter((order) =>
+    isWithinLastDays(new Date(order.createdAt), 30),
+  );
+
+  const revenueLast24h = ordersLast24h.reduce((sum, order) => {
+    return sum + Number(order.totalPrice ?? 0);
+  }, 0);
+
+  const revenueLast7d = ordersLast7d.reduce((sum, order) => {
+    return sum + Number(order.totalPrice ?? 0);
+  }, 0);
+
+  const revenueLast30d = ordersLast30d.reduce((sum, order) => {
+    return sum + Number(order.totalPrice ?? 0);
+  }, 0);
+
+  const recentOrders = orders.slice(0, 5).map((order) => [
+    order.orderId,
+    order.currency ?? "-",
+    order.totalPrice ? `£${Number(order.totalPrice).toFixed(2)}` : "-",
+    new Date(order.createdAt).toLocaleString(),
+  ]);
+
+  const revenueByDayMap: Record<string, number> = {};
+
+  for (const order of orders) {
+    const day = new Date(order.createdAt).toLocaleDateString("en-GB");
+    revenueByDayMap[day] =
+      (revenueByDayMap[day] || 0) + Number(order.totalPrice ?? 0);
+  }
+
+  const revenueTrendRows = Object.entries(revenueByDayMap)
+    .sort((a, b) => {
+      const [dayA, monthA, yearA] = a[0].split("/");
+      const [dayB, monthB, yearB] = b[0].split("/");
+
+      const dateA = new Date(`${yearA}-${monthA}-${dayA}`);
+      const dateB = new Date(`${yearB}-${monthB}-${dayB}`);
+
+      return dateA.getTime() - dateB.getTime();
+    })
+    .map(([date, revenue]) => [date, `£${revenue.toFixed(2)}`]);
+
+  const revenueChartData = Object.entries(revenueByDayMap)
+    .sort((a, b) => {
+      const [dayA, monthA, yearA] = a[0].split("/");
+      const [dayB, monthB, yearB] = b[0].split("/");
+
+      const dateA = new Date(`${yearA}-${monthA}-${dayA}`);
+      const dateB = new Date(`${yearB}-${monthB}-${dayB}`);
+
+      return dateA.getTime() - dateB.getTime();
+    })
+    .map(([date, revenue]) => ({
+      date,
+      revenue: Number(revenue.toFixed(2)),
+    }));
+
+  const productMap: Record<
+    string,
+    { title: string; quantity: number; revenue: number }
+  > = {};
+
+  for (const order of orders) {
+    const lineItems = Array.isArray(order.lineItems)
+      ? (order.lineItems as any[])
+      : [];
+
+    for (const item of lineItems) {
+      const title = item.title || "Unknown product";
+      const quantity = Number(item.quantity ?? 0);
+      const price = Number(item.price ?? 0);
+
+      if (!productMap[title]) {
+        productMap[title] = {
+          title,
+          quantity: 0,
+          revenue: 0,
+        };
       }
-    }`,
-    {
-      variables: {
-        productId: product.id,
-        variants: [{ id: variantId, price: "100.00" }],
-      },
-    },
-  );
 
-  const variantResponseJson = await variantResponse.json();
+      productMap[title].quantity += quantity;
+      productMap[title].revenue += quantity * price;
+    }
+  }
 
-  return {
-    product: responseJson!.data!.productCreate!.product,
-    variant: variantResponseJson!.data!.productVariantsBulkUpdate!.productVariants,
-  };
+  const topProductsRows = Object.values(productMap)
+    .sort((a, b) => b.revenue - a.revenue)
+    .slice(0, 5)
+    .map((product) => [
+      product.title,
+      product.quantity.toString(),
+      `£${product.revenue.toFixed(2)}`,
+    ]);
+
+  const alerts: string[] = [];
+
+  if (ordersLast24h.length === 0 && totalOrders > 0) {
+    alerts.push("⚠ No orders in the last 24 hours.");
+  }
+
+  if (revenueLast7d > 0 && revenueLast24h < (revenueLast7d / 7) * 0.5) {
+    alerts.push("⚠ Revenue dropped significantly compared to the last 7 days.");
+  }
+
+  if (ordersLast24h.length >= 5) {
+    alerts.push("🔥 High order activity detected in the last 24 hours.");
+  }
+
+  if (topProductsRows.length > 0) {
+    alerts.push(`📈 Top product right now: ${topProductsRows[0][0]}`);
+  }
+
+  return json({
+    totalOrders,
+    totalRevenue: totalRevenue.toFixed(2),
+    averageOrderValue: averageOrderValue.toFixed(2),
+    latestOrderTime: latestOrder
+      ? new Date(latestOrder.createdAt).toLocaleString()
+      : "No orders yet",
+
+    ordersLast24h: ordersLast24h.length,
+    ordersLast7d: ordersLast7d.length,
+    ordersLast30d: ordersLast30d.length,
+
+    revenueLast24h: revenueLast24h.toFixed(2),
+    revenueLast7d: revenueLast7d.toFixed(2),
+    revenueLast30d: revenueLast30d.toFixed(2),
+
+    recentOrders,
+    revenueTrendRows,
+    revenueChartData,
+    topProductsRows,
+    alerts,
+  });
 };
 
-export default function Index() {
-  const fetcher = useFetcher<typeof action>();
-  const shopify = useAppBridge();
-
-  const isLoading =
-    ["loading", "submitting"].includes(fetcher.state) &&
-    fetcher.formMethod === "POST";
-
-  const productId = fetcher.data?.product?.id.replace("gid://shopify/Product/", "");
-
-  useEffect(() => {
-    if (productId) {
-      shopify.toast.show("Product created");
-    }
-  }, [productId, shopify]);
-
-  const generateProduct = () => fetcher.submit({}, { method: "POST" });
+export default function Dashboard() {
+  const {
+    totalOrders,
+    totalRevenue,
+    averageOrderValue,
+    latestOrderTime,
+    ordersLast24h,
+    ordersLast7d,
+    ordersLast30d,
+    revenueLast24h,
+    revenueLast7d,
+    revenueLast30d,
+    recentOrders,
+    revenueChartData,
+    topProductsRows,
+    alerts,
+  } = useLoaderData<typeof loader>();
 
   return (
-    <Page>
-      <TitleBar title="Smart Checkout Insights">
-        <button onClick={generateProduct}>Generate a product</button>
-      </TitleBar>
-
+    <Page title="Smart Checkout Insights">
       <BlockStack gap="500">
-        {/* ✅ YOUR PORTFOLIO DASHBOARD PLACEHOLDERS */}
         <Layout>
-          <Layout.Section>
+          <Layout.Section oneHalf>
             <Card>
-              <BlockStack gap="400">
+              <BlockStack gap="200">
                 <Text as="h2" variant="headingMd">
-                  Funnel
+                  Total Orders
                 </Text>
-                <Text as="p" tone="subdued">
-                  Placeholder: Started → Updated → Completed metrics will appear here.
+                <Text as="p" variant="heading2xl">
+                  {totalOrders}
                 </Text>
               </BlockStack>
             </Card>
           </Layout.Section>
 
-          <Layout.Section>
+          <Layout.Section oneHalf>
             <Card>
-              <BlockStack gap="400">
+              <BlockStack gap="200">
                 <Text as="h2" variant="headingMd">
-                  Trends
+                  Total Revenue
                 </Text>
-                <Text as="p" tone="subdued">
-                  Placeholder: Abandonment rate & conversion trends will appear here.
+                <Text as="p" variant="heading2xl">
+                  £{totalRevenue}
                 </Text>
               </BlockStack>
             </Card>
           </Layout.Section>
 
-          <Layout.Section>
+          <Layout.Section oneHalf>
             <Card>
-              <BlockStack gap="400">
+              <BlockStack gap="200">
                 <Text as="h2" variant="headingMd">
-                  Top abandoned products
+                  Average Order Value
                 </Text>
-                <Text as="p" tone="subdued">
-                  Placeholder: Most abandoned products and drop-off reasons will appear here.
+                <Text as="p" variant="heading2xl">
+                  £{averageOrderValue}
                 </Text>
               </BlockStack>
             </Card>
           </Layout.Section>
 
-          <Layout.Section>
+          <Layout.Section oneHalf>
             <Card>
-              <BlockStack gap="400">
+              <BlockStack gap="200">
                 <Text as="h2" variant="headingMd">
-                  Alerts
+                  Latest Order Time
                 </Text>
-                <Text as="p" tone="subdued">
-                  Placeholder: Alert rules and recent alerts will appear here.
+                <Text as="p" variant="bodyLg">
+                  {latestOrderTime}
                 </Text>
-
-                {/* Optional: link buttons to your new pages */}
-                <InlineStack gap="200">
-                  <Button url="/app/alerts">Go to Alerts</Button>
-                  <Button url="/app/settings" variant="plain">
-                    Settings
-                  </Button>
-                </InlineStack>
               </BlockStack>
             </Card>
           </Layout.Section>
         </Layout>
 
-        <Divider />
-
-        {/* ✅ KEEP TEMPLATE CONTENT BELOW (OPTIONAL) */}
         <Layout>
-          <Layout.Section>
+          <Layout.Section oneThird>
             <Card>
-              <BlockStack gap="500">
+              <BlockStack gap="200">
                 <Text as="h2" variant="headingMd">
-                  Template demo (optional)
+                  Orders in Last 24h
+                </Text>
+                <Text as="p" variant="heading2xl">
+                  {ordersLast24h}
                 </Text>
                 <Text as="p" tone="subdued">
-                  This section is from Shopify’s starter template. You can keep it for now and remove later.
+                  Revenue: £{revenueLast24h}
                 </Text>
-
-                <InlineStack gap="300">
-                  <Button loading={isLoading} onClick={generateProduct}>
-                    Generate a product
-                  </Button>
-
-                  {fetcher.data?.product && (
-                    <Button
-                      url={`shopify:admin/products/${productId}`}
-                      target="_blank"
-                      variant="plain"
-                    >
-                      View product
-                    </Button>
-                  )}
-                </InlineStack>
-
-                {fetcher.data?.product && (
-                  <>
-                    <Text as="h3" variant="headingMd">
-                      productCreate mutation
-                    </Text>
-                    <Box
-                      padding="400"
-                      background="bg-surface-active"
-                      borderWidth="025"
-                      borderRadius="200"
-                      borderColor="border"
-                      overflowX="scroll"
-                    >
-                      <pre style={{ margin: 0 }}>
-                        <code>{JSON.stringify(fetcher.data.product, null, 2)}</code>
-                      </pre>
-                    </Box>
-
-                    <Text as="h3" variant="headingMd">
-                      productVariantsBulkUpdate mutation
-                    </Text>
-                    <Box
-                      padding="400"
-                      background="bg-surface-active"
-                      borderWidth="025"
-                      borderRadius="200"
-                      borderColor="border"
-                      overflowX="scroll"
-                    >
-                      <pre style={{ margin: 0 }}>
-                        <code>{JSON.stringify(fetcher.data.variant, null, 2)}</code>
-                      </pre>
-                    </Box>
-                  </>
-                )}
               </BlockStack>
             </Card>
           </Layout.Section>
 
-          <Layout.Section variant="oneThird">
-            <BlockStack gap="500">
-              <Card>
-                <BlockStack gap="200">
-                  <Text as="h2" variant="headingMd">
-                    Navigation
-                  </Text>
-                  <List>
-                    <List.Item>
-                      <Link url="/app" removeUnderline>
-                        Dashboard
-                      </Link>
-                    </List.Item>
-                    <List.Item>
-                      <Link url="/app/alerts" removeUnderline>
-                        Alerts
-                      </Link>
-                    </List.Item>
-                    <List.Item>
-                      <Link url="/app/settings" removeUnderline>
-                        Settings
-                      </Link>
-                    </List.Item>
-                  </List>
-                </BlockStack>
-              </Card>
+          <Layout.Section oneThird>
+            <Card>
+              <BlockStack gap="200">
+                <Text as="h2" variant="headingMd">
+                  Orders in Last 7d
+                </Text>
+                <Text as="p" variant="heading2xl">
+                  {ordersLast7d}
+                </Text>
+                <Text as="p" tone="subdued">
+                  Revenue: £{revenueLast7d}
+                </Text>
+              </BlockStack>
+            </Card>
+          </Layout.Section>
 
-              <Card>
-                <BlockStack gap="200">
-                  <Text as="h2" variant="headingMd">
-                    Next steps
-                  </Text>
+          <Layout.Section oneThird>
+            <Card>
+              <BlockStack gap="200">
+                <Text as="h2" variant="headingMd">
+                  Orders in Last 30d
+                </Text>
+                <Text as="p" variant="heading2xl">
+                  {ordersLast30d}
+                </Text>
+                <Text as="p" tone="subdued">
+                  Revenue: £{revenueLast30d}
+                </Text>
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+        </Layout>
+
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="300">
+                <Text as="h2" variant="headingMd">
+                  Smart Alerts
+                </Text>
+
+                {alerts.length === 0 ? (
                   <Text as="p" tone="subdued">
-                    Day 2: PostgreSQL + Prisma schema for webhook events.
+                    No alerts detected.
                   </Text>
-                </BlockStack>
-              </Card>
-            </BlockStack>
+                ) : (
+                  alerts.map((alert, index) => (
+                    <Text key={index} as="p">
+                      {alert}
+                    </Text>
+                  ))
+                )}
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+        </Layout>
+
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="300">
+                <Text as="h2" variant="headingMd">
+                  Revenue Trend by Day
+                </Text>
+
+                {revenueChartData.length === 0 ? (
+                  <Text as="p" tone="subdued">
+                    No revenue data yet.
+                  </Text>
+                ) : (
+                  <div style={{ width: "100%", height: 300 }}>
+                    <ResponsiveContainer>
+                      <LineChart data={revenueChartData}>
+                        <XAxis dataKey="date" />
+                        <YAxis />
+                        <Tooltip />
+                        <Line
+                          type="monotone"
+                          dataKey="revenue"
+                          stroke="#008060"
+                          strokeWidth={3}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+        </Layout>
+
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="300">
+                <Text as="h2" variant="headingMd">
+                  Top Products by Revenue
+                </Text>
+                <DataTable
+                  columnContentTypes={["text", "text", "text"]}
+                  headings={["Product", "Quantity Sold", "Revenue"]}
+                  rows={topProductsRows}
+                />
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+        </Layout>
+
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="300">
+                <InlineStack align="space-between">
+                  <Text as="h2" variant="headingMd">
+                    Recent Orders
+                  </Text>
+                </InlineStack>
+
+                <DataTable
+                  columnContentTypes={["text", "text", "text", "text"]}
+                  headings={["Order ID", "Currency", "Total Price", "Created At"]}
+                  rows={recentOrders}
+                />
+              </BlockStack>
+            </Card>
           </Layout.Section>
         </Layout>
       </BlockStack>
