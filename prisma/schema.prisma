@@ -24,6 +24,8 @@ model Shop {
   webhookEvents WebhookEvent[]
   checkoutEvents CheckoutEvent[]
   orderEvents    OrderEvent[]
+  alertEvents    AlertEvent[]
+  alertRules     AlertRule[]
 }
 
 model WebhookEvent {
@@ -70,6 +72,37 @@ model OrderEvent {
   shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
 
   @@index([shopId, createdAt])
+}
+
+model AlertEvent {
+  id          String   @id @default(cuid())
+  shopId       String
+  code        String
+  title       String
+  severity    String
+  description String
+  metricValue String?
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  resolvedAt  DateTime?
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, code, createdAt])
+}
+
+model AlertRule {
+  id        String   @id @default(cuid())
+  shopId     String
+  code      String
+  enabled   Boolean  @default(true)
+  threshold String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, code])
 }
 
 model Session {
