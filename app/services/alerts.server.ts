@@ -1,4 +1,4 @@
-export type AlertSeverity = "info" | "warning" | "critical" | "positive";
+import { type AlertSeverity } from "./alerts.shared";
 
 export type SmartAlert = {
     id: string;
@@ -27,19 +27,8 @@ function isWithinLastDays(date: Date, days: number) {
     return diffMs <= days * 24 * 60 * 60 * 1000;
 }
 
-export function severityTone(severity: AlertSeverity) {
-    switch (severity) {
-        case "critical":
-            return "critical";
-        case "warning":
-            return "warning";
-        case "positive":
-            return "success";
-        case "info":
-        default:
-            return "info";
-    }
-}
+export { isWithinLastHours, isWithinLastDays };
+
 
 export function buildSmartAlerts(orders: OrderLike[]): SmartAlert[] {
     const alerts: SmartAlert[] = [];

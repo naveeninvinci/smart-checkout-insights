@@ -26,7 +26,6 @@ export default function App() {
         </Link>
         <Link to="/app/alerts">Alerts</Link>
         <Link to="/app/settings">Settings</Link>
-        <Link to="/app/alerts-sync">Sync Alerts</Link>
       </NavMenu>
       <Outlet />
     </AppProvider>

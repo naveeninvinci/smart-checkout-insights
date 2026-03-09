@@ -20,18 +20,7 @@ import {
 } from "recharts";
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
-
-function isWithinLastHours(date: Date, hours: number) {
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  return diffMs <= hours * 60 * 60 * 1000;
-}
-
-function isWithinLastDays(date: Date, days: number) {
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  return diffMs <= days * 24 * 60 * 60 * 1000;
-}
+import { isWithinLastHours, isWithinLastDays } from "../services/alerts.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
@@ -41,6 +30,19 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   });
 
   const totalOrders = orders.length;
+
+  // Calculate the most common currency
+  const currencyCounts: Record<string, number> = {};
+  for (const order of orders) {
+    const currency = order.currency || "GBP";
+    currencyCounts[currency] = (currencyCounts[currency] || 0) + 1;
+  }
+  const primaryCurrency = Object.entries(currencyCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || "GBP";
+
+  const formatCurrency = (amount: number) => {
+    const symbol = primaryCurrency === "GBP" ? "£" : primaryCurrency === "USD" ? "$" : primaryCurrency === "EUR" ? "€" : primaryCurrency;
+    return `${symbol}${amount.toFixed(2)}`;
+  };
 
   const totalRevenue = orders.reduce((sum, order) => {
     return sum + Number(order.totalPrice ?? 0);
@@ -77,42 +79,32 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const recentOrders = orders.slice(0, 5).map((order) => [
     order.orderId,
     order.currency ?? "-",
-    order.totalPrice ? `£${Number(order.totalPrice).toFixed(2)}` : "-",
+    order.totalPrice ? formatCurrency(Number(order.totalPrice)) : "-",
     new Date(order.createdAt).toLocaleString(),
   ]);
 
-  const revenueByDayMap: Record<string, number> = {};
+  const revenueByDayMap: Record<string, { revenue: number; date: Date }> = {};
 
   for (const order of orders) {
-    const day = new Date(order.createdAt).toLocaleDateString("en-GB");
-    revenueByDayMap[day] =
-      (revenueByDayMap[day] || 0) + Number(order.totalPrice ?? 0);
+    const orderDate = new Date(order.createdAt);
+    const dayKey = orderDate.toISOString().split('T')[0]; // YYYY-MM-DD format
+    if (!revenueByDayMap[dayKey]) {
+      revenueByDayMap[dayKey] = { revenue: 0, date: orderDate };
+    }
+    revenueByDayMap[dayKey].revenue += Number(order.totalPrice ?? 0);
   }
 
   const revenueTrendRows = Object.entries(revenueByDayMap)
-    .sort((a, b) => {
-      const [dayA, monthA, yearA] = a[0].split("/");
-      const [dayB, monthB, yearB] = b[0].split("/");
-
-      const dateA = new Date(`${yearA}-${monthA}-${dayA}`);
-      const dateB = new Date(`${yearB}-${monthB}-${dayB}`);
-
-      return dateA.getTime() - dateB.getTime();
-    })
-    .map(([date, revenue]) => [date, `£${revenue.toFixed(2)}`]);
+    .sort(([, a], [, b]) => a.date.getTime() - b.date.getTime())
+    .map(([dateKey, { revenue }]) => {
+      const displayDate = new Date(dateKey).toLocaleDateString("en-GB");
+      return [displayDate, formatCurrency(revenue)];
+    });
 
   const revenueChartData = Object.entries(revenueByDayMap)
-    .sort((a, b) => {
-      const [dayA, monthA, yearA] = a[0].split("/");
-      const [dayB, monthB, yearB] = b[0].split("/");
-
-      const dateA = new Date(`${yearA}-${monthA}-${dayA}`);
-      const dateB = new Date(`${yearB}-${monthB}-${dayB}`);
-
-      return dateA.getTime() - dateB.getTime();
-    })
-    .map(([date, revenue]) => ({
-      date,
+    .sort(([, a], [, b]) => a.date.getTime() - b.date.getTime())
+    .map(([dateKey, { revenue }]) => ({
+      date: new Date(dateKey).toLocaleDateString("en-GB"),
       revenue: Number(revenue.toFixed(2)),
     }));
 
@@ -150,7 +142,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     .map((product) => [
       product.title,
       product.quantity.toString(),
-      `£${product.revenue.toFixed(2)}`,
+      formatCurrency(product.revenue),
     ]);
 
   const alerts: string[] = [];
@@ -172,6 +164,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   return json({
+    primaryCurrency,
     totalOrders,
     totalRevenue: totalRevenue.toFixed(2),
     averageOrderValue: averageOrderValue.toFixed(2),
@@ -197,6 +190,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export default function Dashboard() {
   const {
+    primaryCurrency,
     totalOrders,
     totalRevenue,
     averageOrderValue,
@@ -212,6 +206,11 @@ export default function Dashboard() {
     topProductsRows,
     alerts,
   } = useLoaderData<typeof loader>();
+
+  const formatCurrency = (amount: string | number) => {
+    const symbol = primaryCurrency === "GBP" ? "£" : primaryCurrency === "USD" ? "$" : primaryCurrency === "EUR" ? "€" : primaryCurrency;
+    return `${symbol}${Number(amount).toFixed(2)}`;
+  };
 
   return (
     <Page title="Smart Checkout Insights">
@@ -237,7 +236,7 @@ export default function Dashboard() {
                   Total Revenue
                 </Text>
                 <Text as="p" variant="heading2xl">
-                  £{totalRevenue}
+                  {formatCurrency(totalRevenue)}
                 </Text>
               </BlockStack>
             </Card>
@@ -250,7 +249,7 @@ export default function Dashboard() {
                   Average Order Value
                 </Text>
                 <Text as="p" variant="heading2xl">
-                  £{averageOrderValue}
+                  {formatCurrency(averageOrderValue)}
                 </Text>
               </BlockStack>
             </Card>
@@ -281,7 +280,7 @@ export default function Dashboard() {
                   {ordersLast24h}
                 </Text>
                 <Text as="p" tone="subdued">
-                  Revenue: £{revenueLast24h}
+                  Revenue: {formatCurrency(revenueLast24h)}
                 </Text>
               </BlockStack>
             </Card>
@@ -297,7 +296,7 @@ export default function Dashboard() {
                   {ordersLast7d}
                 </Text>
                 <Text as="p" tone="subdued">
-                  Revenue: £{revenueLast7d}
+                  Revenue: {formatCurrency(revenueLast7d)}
                 </Text>
               </BlockStack>
             </Card>
@@ -313,7 +312,7 @@ export default function Dashboard() {
                   {ordersLast30d}
                 </Text>
                 <Text as="p" tone="subdued">
-                  Revenue: £{revenueLast30d}
+                  Revenue: {formatCurrency(revenueLast30d)}
                 </Text>
               </BlockStack>
             </Card>

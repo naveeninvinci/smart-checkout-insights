@@ -12,7 +12,7 @@ import {
 } from "@shopify/polaris";
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
-import { buildSmartAlerts, severityTone } from "../services/alerts.server";
+import { severityTone } from "../services/alerts.shared";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
     const { session } = await authenticate.admin(request);
@@ -20,6 +20,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const shop = await prisma.shop.findUnique({
         where: { shopDomain: session.shop },
     });
+
+    const { buildSmartAlerts } = await import("../services/alerts.server");
 
     const orders = shop
         ? await prisma.orderEvent.findMany({
