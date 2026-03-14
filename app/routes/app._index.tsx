@@ -20,29 +20,75 @@ import {
 } from "recharts";
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
-import { isWithinLastHours, isWithinLastDays } from "../services/alerts.server";
+
+function isWithinLastHours(date: Date, hours: number) {
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  return diffMs <= hours * 60 * 60 * 1000;
+}
+
+function isWithinLastDays(date: Date, days: number) {
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  return diffMs <= days * 24 * 60 * 60 * 1000;
+}
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
 
-  const orders = await prisma.orderEvent.findMany({
-    orderBy: { createdAt: "desc" },
+  const shop = await prisma.shop.findUnique({
+    where: { shopDomain: session.shop },
+  });
+
+  const { buildSmartAlerts } = await import("../services/alerts.server");
+
+  const orders = shop
+    ? await prisma.orderEvent.findMany({
+      where: { shopId: shop.id },
+      orderBy: { createdAt: "desc" },
+    })
+    : [];
+
+  const checkouts = shop
+    ? await prisma.checkoutEvent.findMany({
+      where: { shopId: shop.id },
+      orderBy: { createdAt: "desc" },
+    })
+    : [];
+
+  const enabledRules = shop
+    ? await prisma.alertRule.findMany({
+      where: {
+        shopId: shop.id,
+        enabled: true,
+      },
+    })
+    : [];
+
+  const enabledCodes = new Set(enabledRules.map((rule) => rule.code));
+
+  const structuredAlerts = buildSmartAlerts(orders, checkouts).filter((alert) =>
+    enabledCodes.has(alert.code),
+  );
+
+  const alerts = structuredAlerts.map((alert) => {
+    switch (alert.code) {
+      case "NO_ORDERS_24H":
+        return "⚠ No orders in the last 24 hours.";
+      case "REVENUE_DROP_24H":
+        return "⚠ Revenue dropped significantly compared to the last 7 days.";
+      case "HIGH_ORDER_ACTIVITY_24H":
+        return "🔥 High order activity detected in the last 24 hours.";
+      case "TOP_PRODUCT_ACTIVE":
+        return `📈 ${alert.title}`;
+      case "CHECKOUT_CONVERSION_DROP":
+        return "🚨 Checkout conversion issue detected. Customers are starting checkout, but no orders were completed recently.";
+      default:
+        return `ℹ ${alert.title}`;
+    }
   });
 
   const totalOrders = orders.length;
-
-  // Calculate the most common currency
-  const currencyCounts: Record<string, number> = {};
-  for (const order of orders) {
-    const currency = order.currency || "GBP";
-    currencyCounts[currency] = (currencyCounts[currency] || 0) + 1;
-  }
-  const primaryCurrency = Object.entries(currencyCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || "GBP";
-
-  const formatCurrency = (amount: number) => {
-    const symbol = primaryCurrency === "GBP" ? "£" : primaryCurrency === "USD" ? "$" : primaryCurrency === "EUR" ? "€" : primaryCurrency;
-    return `${symbol}${amount.toFixed(2)}`;
-  };
 
   const totalRevenue = orders.reduce((sum, order) => {
     return sum + Number(order.totalPrice ?? 0);
@@ -79,32 +125,30 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const recentOrders = orders.slice(0, 5).map((order) => [
     order.orderId,
     order.currency ?? "-",
-    order.totalPrice ? formatCurrency(Number(order.totalPrice)) : "-",
+    order.totalPrice ? `£${Number(order.totalPrice).toFixed(2)}` : "-",
     new Date(order.createdAt).toLocaleString(),
   ]);
 
-  const revenueByDayMap: Record<string, { revenue: number; date: Date }> = {};
+  const revenueByDayMap: Record<string, number> = {};
 
   for (const order of orders) {
-    const orderDate = new Date(order.createdAt);
-    const dayKey = orderDate.toISOString().split('T')[0]; // YYYY-MM-DD format
-    if (!revenueByDayMap[dayKey]) {
-      revenueByDayMap[dayKey] = { revenue: 0, date: orderDate };
-    }
-    revenueByDayMap[dayKey].revenue += Number(order.totalPrice ?? 0);
+    const day = new Date(order.createdAt).toLocaleDateString("en-GB");
+    revenueByDayMap[day] =
+      (revenueByDayMap[day] || 0) + Number(order.totalPrice ?? 0);
   }
 
-  const revenueTrendRows = Object.entries(revenueByDayMap)
-    .sort(([, a], [, b]) => a.date.getTime() - b.date.getTime())
-    .map(([dateKey, { revenue }]) => {
-      const displayDate = new Date(dateKey).toLocaleDateString("en-GB");
-      return [displayDate, formatCurrency(revenue)];
-    });
-
   const revenueChartData = Object.entries(revenueByDayMap)
-    .sort(([, a], [, b]) => a.date.getTime() - b.date.getTime())
-    .map(([dateKey, { revenue }]) => ({
-      date: new Date(dateKey).toLocaleDateString("en-GB"),
+    .sort((a, b) => {
+      const [dayA, monthA, yearA] = a[0].split("/");
+      const [dayB, monthB, yearB] = b[0].split("/");
+
+      const dateA = new Date(`${yearA}-${monthA}-${dayA}`);
+      const dateB = new Date(`${yearB}-${monthB}-${dayB}`);
+
+      return dateA.getTime() - dateB.getTime();
+    })
+    .map(([date, revenue]) => ({
+      date,
       revenue: Number(revenue.toFixed(2)),
     }));
 
@@ -142,29 +186,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     .map((product) => [
       product.title,
       product.quantity.toString(),
-      formatCurrency(product.revenue),
+      `£${product.revenue.toFixed(2)}`,
     ]);
 
-  const alerts: string[] = [];
+  const checkoutsLast30m = checkouts.filter(
+    (checkout) =>
+      new Date(checkout.createdAt) >= new Date(Date.now() - 30 * 60 * 1000),
+  ).length;
 
-  if (ordersLast24h.length === 0 && totalOrders > 0) {
-    alerts.push("⚠ No orders in the last 24 hours.");
-  }
+  const ordersLast30m = orders.filter(
+    (order) =>
+      new Date(order.createdAt) >= new Date(Date.now() - 30 * 60 * 1000),
+  ).length;
 
-  if (revenueLast7d > 0 && revenueLast24h < (revenueLast7d / 7) * 0.5) {
-    alerts.push("⚠ Revenue dropped significantly compared to the last 7 days.");
-  }
-
-  if (ordersLast24h.length >= 5) {
-    alerts.push("🔥 High order activity detected in the last 24 hours.");
-  }
-
-  if (topProductsRows.length > 0) {
-    alerts.push(`📈 Top product right now: ${topProductsRows[0][0]}`);
-  }
+  const checkoutConversionRate =
+    checkouts.length > 0 ? ((orders.length / checkouts.length) * 100).toFixed(1) : "0.0";
 
   return json({
-    primaryCurrency,
     totalOrders,
     totalRevenue: totalRevenue.toFixed(2),
     averageOrderValue: averageOrderValue.toFixed(2),
@@ -181,16 +219,19 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     revenueLast30d: revenueLast30d.toFixed(2),
 
     recentOrders,
-    revenueTrendRows,
     revenueChartData,
     topProductsRows,
     alerts,
+
+    totalCheckouts: checkouts.length,
+    checkoutsLast30m,
+    ordersLast30m,
+    checkoutConversionRate,
   });
 };
 
 export default function Dashboard() {
   const {
-    primaryCurrency,
     totalOrders,
     totalRevenue,
     averageOrderValue,
@@ -205,18 +246,17 @@ export default function Dashboard() {
     revenueChartData,
     topProductsRows,
     alerts,
+    totalCheckouts,
+    checkoutsLast30m,
+    ordersLast30m,
+    checkoutConversionRate,
   } = useLoaderData<typeof loader>();
-
-  const formatCurrency = (amount: string | number) => {
-    const symbol = primaryCurrency === "GBP" ? "£" : primaryCurrency === "USD" ? "$" : primaryCurrency === "EUR" ? "€" : primaryCurrency;
-    return `${symbol}${Number(amount).toFixed(2)}`;
-  };
 
   return (
     <Page title="Smart Checkout Insights">
       <BlockStack gap="500">
         <Layout>
-          <Layout.Section oneHalf>
+          <Layout.Section>
             <Card>
               <BlockStack gap="200">
                 <Text as="h2" variant="headingMd">
@@ -229,33 +269,33 @@ export default function Dashboard() {
             </Card>
           </Layout.Section>
 
-          <Layout.Section oneHalf>
+          <Layout.Section>
             <Card>
               <BlockStack gap="200">
                 <Text as="h2" variant="headingMd">
                   Total Revenue
                 </Text>
                 <Text as="p" variant="heading2xl">
-                  {formatCurrency(totalRevenue)}
+                  £{totalRevenue}
                 </Text>
               </BlockStack>
             </Card>
           </Layout.Section>
 
-          <Layout.Section oneHalf>
+          <Layout.Section>
             <Card>
               <BlockStack gap="200">
                 <Text as="h2" variant="headingMd">
                   Average Order Value
                 </Text>
                 <Text as="p" variant="heading2xl">
-                  {formatCurrency(averageOrderValue)}
+                  £{averageOrderValue}
                 </Text>
               </BlockStack>
             </Card>
           </Layout.Section>
 
-          <Layout.Section oneHalf>
+          <Layout.Section>
             <Card>
               <BlockStack gap="200">
                 <Text as="h2" variant="headingMd">
@@ -270,7 +310,7 @@ export default function Dashboard() {
         </Layout>
 
         <Layout>
-          <Layout.Section oneThird>
+          <Layout.Section>
             <Card>
               <BlockStack gap="200">
                 <Text as="h2" variant="headingMd">
@@ -280,13 +320,13 @@ export default function Dashboard() {
                   {ordersLast24h}
                 </Text>
                 <Text as="p" tone="subdued">
-                  Revenue: {formatCurrency(revenueLast24h)}
+                  Revenue: £{revenueLast24h}
                 </Text>
               </BlockStack>
             </Card>
           </Layout.Section>
 
-          <Layout.Section oneThird>
+          <Layout.Section>
             <Card>
               <BlockStack gap="200">
                 <Text as="h2" variant="headingMd">
@@ -296,13 +336,13 @@ export default function Dashboard() {
                   {ordersLast7d}
                 </Text>
                 <Text as="p" tone="subdued">
-                  Revenue: {formatCurrency(revenueLast7d)}
+                  Revenue: £{revenueLast7d}
                 </Text>
               </BlockStack>
             </Card>
           </Layout.Section>
 
-          <Layout.Section oneThird>
+          <Layout.Section>
             <Card>
               <BlockStack gap="200">
                 <Text as="h2" variant="headingMd">
@@ -312,7 +352,31 @@ export default function Dashboard() {
                   {ordersLast30d}
                 </Text>
                 <Text as="p" tone="subdued">
-                  Revenue: {formatCurrency(revenueLast30d)}
+                  Revenue: £{revenueLast30d}
+                </Text>
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+        </Layout>
+
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="200">
+                <Text as="h2" variant="headingMd">
+                  Checkout Funnel
+                </Text>
+                <Text as="p">
+                  Total checkouts captured: {totalCheckouts}
+                </Text>
+                <Text as="p">
+                  Checkouts in last 30 minutes: {checkoutsLast30m}
+                </Text>
+                <Text as="p">
+                  Orders in last 30 minutes: {ordersLast30m}
+                </Text>
+                <Text as="p">
+                  Overall checkout-to-order conversion: {checkoutConversionRate}%
                 </Text>
               </BlockStack>
             </Card>

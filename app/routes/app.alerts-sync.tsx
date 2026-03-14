@@ -27,7 +27,25 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         orderBy: { createdAt: "desc" },
     });
 
-    const alerts = buildSmartAlerts(orders);
+    const checkouts = await prisma.checkoutEvent.findMany({
+        where: { shopId: shop.id },
+        orderBy: { createdAt: "desc" },
+    });
+
+    const enabledRules = await prisma.alertRule.findMany({
+        where: {
+            shopId: shop.id,
+            enabled: true,
+        },
+    });
+
+    const enabledCodes = new Set(enabledRules.map((rule) => rule.code));
+
+    const alerts = buildSmartAlerts(orders, checkouts).filter((alert) =>
+        enabledCodes.has(alert.code),
+    );
+
+    let createdCount = 0;
 
     for (const alert of alerts) {
         const existing = await prisma.alertEvent.findFirst({
@@ -51,12 +69,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
                     status: "active",
                 },
             });
+
+            createdCount += 1;
         }
     }
 
     return json({
         ok: true,
-        created: alerts.length,
+        created: createdCount,
+        totalGenerated: alerts.length,
     });
 };
 
@@ -80,9 +101,15 @@ export default function AlertsSyncPage() {
                         </Button>
                     </fetcher.Form>
 
-                    {fetcher.data?.ok === true && (
-                        <Text as="p">Alerts synced successfully.</Text>
-                    )}
+                    {fetcher.data?.ok === true &&
+                        "created" in fetcher.data &&
+                        "totalGenerated" in fetcher.data && (
+                            <Text as="p">
+                                Alerts synced successfully. New alerts created:{" "}
+                                {fetcher.data.created}. Total generated:{" "}
+                                {fetcher.data.totalGenerated}.
+                            </Text>
+                        )}
 
                     {fetcher.data?.ok === false && "error" in fetcher.data && (
                         <Text as="p" tone="critical">

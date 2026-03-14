@@ -30,7 +30,27 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         })
         : [];
 
-    const alerts = buildSmartAlerts(orders);
+    const checkouts = shop
+        ? await prisma.checkoutEvent.findMany({
+            where: { shopId: shop.id },
+            orderBy: { createdAt: "desc" },
+        })
+        : [];
+
+    const enabledRules = shop
+        ? await prisma.alertRule.findMany({
+            where: {
+                shopId: shop.id,
+                enabled: true,
+            },
+        })
+        : [];
+
+    const enabledCodes = new Set(enabledRules.map((rule) => rule.code));
+
+    const alerts = buildSmartAlerts(orders, checkouts).filter((alert) =>
+        enabledCodes.has(alert.code),
+    );
 
     const alertHistory = shop
         ? await prisma.alertEvent.findMany({
@@ -47,65 +67,90 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         new Date(alert.createdAt).toLocaleString(),
     ]);
 
-    return json({ alerts, alertHistoryRows });
+    return json({
+        alerts,
+        alertHistoryRows,
+        lastCheckedAt: new Date().toLocaleString(),
+    });
 };
 
 export default function AlertsPage() {
-    const { alerts, alertHistoryRows } = useLoaderData<typeof loader>();
+    const { alerts, alertHistoryRows, lastCheckedAt } =
+        useLoaderData<typeof loader>();
 
     return (
         <Page title="Alerts">
-            <Layout>
-                <Layout.Section>
-                    <Card>
-                        <BlockStack gap="300">
-                            <Text as="h2" variant="headingMd">
-                                Active Smart Alerts
-                            </Text>
-
-                            {alerts.length === 0 ? (
-                                <Text as="p" tone="subdued">
-                                    No active alerts right now.
+            <BlockStack gap="500">
+                <Layout>
+                    <Layout.Section>
+                        <Card>
+                            <BlockStack gap="300">
+                                <Text as="h2" variant="headingMd">
+                                    Active Smart Alerts
                                 </Text>
-                            ) : (
-                                alerts.map((alert) => (
-                                    <Card key={alert.id}>
-                                        <BlockStack gap="200">
-                                            <Text as="h3" variant="headingMd">
-                                                {alert.title}
-                                            </Text>
 
-                                            <Badge tone={severityTone(alert.severity)}>
-                                                {alert.severity}
-                                            </Badge>
+                                <Text as="p" tone="subdued">
+                                    Last checked: {lastCheckedAt}
+                                </Text>
 
-                                            <Text as="p" tone="subdued">
-                                                {alert.description}
-                                            </Text>
-                                        </BlockStack>
-                                    </Card>
-                                ))
-                            )}
-                        </BlockStack>
-                    </Card>
-                </Layout.Section>
+                                {alerts.length === 0 ? (
+                                    <Text as="p" tone="subdued">
+                                        No active alerts right now.
+                                    </Text>
+                                ) : (
+                                    alerts.map((alert) => (
+                                        <Card key={alert.id}>
+                                            <BlockStack gap="200">
+                                                <Text as="h3" variant="headingMd">
+                                                    {alert.title}
+                                                </Text>
 
-                <Layout.Section>
-                    <Card>
-                        <BlockStack gap="300">
-                            <Text as="h2" variant="headingMd">
-                                Alert History
-                            </Text>
+                                                <Badge tone={severityTone(alert.severity)}>
+                                                    {alert.severity}
+                                                </Badge>
 
-                            <DataTable
-                                columnContentTypes={["text", "text", "text", "text"]}
-                                headings={["Title", "Severity", "Status", "Created At"]}
-                                rows={alertHistoryRows}
-                            />
-                        </BlockStack>
-                    </Card>
-                </Layout.Section>
-            </Layout>
+                                                <Text as="p" tone="subdued">
+                                                    {alert.description}
+                                                </Text>
+
+                                                {alert.metricValue !== undefined && (
+                                                    <Text as="p">
+                                                        Metric value: {String(alert.metricValue)}
+                                                    </Text>
+                                                )}
+                                            </BlockStack>
+                                        </Card>
+                                    ))
+                                )}
+                            </BlockStack>
+                        </Card>
+                    </Layout.Section>
+                </Layout>
+
+                <Layout>
+                    <Layout.Section>
+                        <Card>
+                            <BlockStack gap="300">
+                                <Text as="h2" variant="headingMd">
+                                    Alert History
+                                </Text>
+
+                                {alertHistoryRows.length === 0 ? (
+                                    <Text as="p" tone="subdued">
+                                        No stored alert history yet.
+                                    </Text>
+                                ) : (
+                                    <DataTable
+                                        columnContentTypes={["text", "text", "text", "text"]}
+                                        headings={["Title", "Severity", "Status", "Created At"]}
+                                        rows={alertHistoryRows}
+                                    />
+                                )}
+                            </BlockStack>
+                        </Card>
+                    </Layout.Section>
+                </Layout>
+            </BlockStack>
         </Page>
     );
 }

@@ -25,6 +25,7 @@ export default function App() {
           Dashboard
         </Link>
         <Link to="/app/alerts">Alerts</Link>
+        <Link to="/app/alerts-sync">Sync Alerts</Link>
         <Link to="/app/settings">Settings</Link>
       </NavMenu>
       <Outlet />

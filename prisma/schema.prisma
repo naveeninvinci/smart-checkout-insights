@@ -93,7 +93,7 @@ model AlertEvent {
 
 model AlertRule {
   id        String   @id @default(cuid())
-  shopId     String
+  shopId    String
   code      String
   enabled   Boolean  @default(true)
   threshold String?
@@ -102,6 +102,7 @@ model AlertRule {
 
   shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
 
+  @@unique([shopId, code])
   @@index([shopId, code])
 }
 

@@ -15,6 +15,10 @@ type OrderLike = {
     lineItems?: unknown;
 };
 
+type CheckoutLike = {
+    createdAt: Date | string;
+};
+
 function isWithinLastHours(date: Date, hours: number) {
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
@@ -29,8 +33,10 @@ function isWithinLastDays(date: Date, days: number) {
 
 export { isWithinLastHours, isWithinLastDays };
 
-
-export function buildSmartAlerts(orders: OrderLike[]): SmartAlert[] {
+export function buildSmartAlerts(
+    orders: OrderLike[],
+    checkouts: CheckoutLike[] = [],
+): SmartAlert[] {
     const alerts: SmartAlert[] = [];
 
     const normalizedOrders = orders.map((order) => ({
@@ -40,6 +46,14 @@ export function buildSmartAlerts(orders: OrderLike[]): SmartAlert[] {
                 ? order.createdAt
                 : new Date(order.createdAt),
         totalPrice: Number(order.totalPrice ?? 0),
+    }));
+
+    const normalizedCheckouts = checkouts.map((checkout) => ({
+        ...checkout,
+        createdAt:
+            checkout.createdAt instanceof Date
+                ? checkout.createdAt
+                : new Date(checkout.createdAt),
     }));
 
     const totalOrders = normalizedOrders.length;
@@ -137,6 +151,28 @@ export function buildSmartAlerts(orders: OrderLike[]): SmartAlert[] {
             description:
                 "This product is currently generating the most tracked revenue in your recent order data.",
             metricValue: topProduct.revenue.toFixed(2),
+        });
+    }
+
+    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+
+    const recentCheckouts = normalizedCheckouts.filter(
+        (checkout) => checkout.createdAt >= thirtyMinutesAgo,
+    );
+
+    const recentOrders = normalizedOrders.filter(
+        (order) => order.createdAt >= thirtyMinutesAgo,
+    );
+
+    if (recentCheckouts.length >= 5 && recentOrders.length === 0) {
+        alerts.push({
+            id: "checkout-conversion-drop",
+            code: "CHECKOUT_CONVERSION_DROP",
+            title: "Checkout conversion issue detected",
+            severity: "critical",
+            description:
+                "Many customers started checkout recently, but no orders were completed in the last 30 minutes.",
+            metricValue: recentCheckouts.length,
         });
     }
 
