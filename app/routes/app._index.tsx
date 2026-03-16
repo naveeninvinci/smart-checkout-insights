@@ -17,6 +17,9 @@ import {
   YAxis,
   Tooltip,
   ResponsiveContainer,
+  BarChart,
+  Bar,
+  Cell,
 } from "recharts";
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
@@ -31,6 +34,12 @@ function isWithinLastDays(date: Date, days: number) {
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   return diffMs <= days * 24 * 60 * 60 * 1000;
+}
+
+function shortCheckoutToken(token: string | null) {
+  if (!token || token.trim().length === 0) return "-";
+  if (token.length <= 12) return token;
+  return `${token.slice(0, 8)}...${token.slice(-4)}`;
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -67,9 +76,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const enabledCodes = new Set(enabledRules.map((rule) => rule.code));
 
-  const structuredAlerts = buildSmartAlerts(orders, checkouts).filter((alert) =>
-    enabledCodes.has(alert.code),
-  );
+  const structuredAlerts = buildSmartAlerts(
+    orders,
+    checkouts,
+    enabledRules,
+  ).filter((alert) => enabledCodes.has(alert.code));
 
   const alerts = structuredAlerts.map((alert) => {
     switch (alert.code) {
@@ -189,18 +200,204 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       `£${product.revenue.toFixed(2)}`,
     ]);
 
-  const checkoutsLast30m = checkouts.filter(
-    (checkout) =>
-      new Date(checkout.createdAt) >= new Date(Date.now() - 30 * 60 * 1000),
-  ).length;
+  const now = Date.now();
+  const thirtyMinutesAgo = new Date(now - 30 * 60 * 1000);
+  const thirtyDaysAgo = new Date(now - 30 * 24 * 60 * 60 * 1000);
+
+  const recentCheckoutEvents = checkouts.filter(
+    (checkout) => new Date(checkout.createdAt) >= thirtyMinutesAgo,
+  );
+
+  const checkoutCreateTokens = new Set(
+    checkouts
+      .filter((checkout) => checkout.eventType === "checkouts/create")
+      .map((checkout) => checkout.checkoutToken)
+      .filter(
+        (token): token is string =>
+          typeof token === "string" && token.trim().length > 0,
+      ),
+  );
+
+  const checkoutUpdateTokens = new Set(
+    checkouts
+      .filter((checkout) => checkout.eventType === "checkouts/update")
+      .map((checkout) => checkout.checkoutToken)
+      .filter(
+        (token): token is string =>
+          typeof token === "string" && token.trim().length > 0,
+      ),
+  );
+
+  const recentCheckoutTokens = new Set(
+    recentCheckoutEvents
+      .map((checkout) => checkout.checkoutToken)
+      .filter(
+        (token): token is string =>
+          typeof token === "string" && token.trim().length > 0,
+      ),
+  );
+
+  const checkoutCreateTokensLast30d = new Set(
+    checkouts
+      .filter(
+        (checkout) =>
+          checkout.eventType === "checkouts/create" &&
+          new Date(checkout.createdAt) >= thirtyDaysAgo,
+      )
+      .map((checkout) => checkout.checkoutToken)
+      .filter(
+        (token): token is string =>
+          typeof token === "string" && token.trim().length > 0,
+      ),
+  );
+
+  const uniqueCheckoutCreates = checkoutCreateTokens.size;
+  const uniqueCheckoutUpdates = checkoutUpdateTokens.size;
+  const checkoutsLast30m = recentCheckoutTokens.size;
 
   const ordersLast30m = orders.filter(
-    (order) =>
-      new Date(order.createdAt) >= new Date(Date.now() - 30 * 60 * 1000),
+    (order) => new Date(order.createdAt) >= thirtyMinutesAgo,
   ).length;
 
+  const matchedOrdersLast30d = orders.filter((order) => {
+    if (!order.checkoutToken) return false;
+    if (new Date(order.createdAt) < thirtyDaysAgo) return false;
+    return checkoutCreateTokensLast30d.has(order.checkoutToken);
+  }).length;
+
   const checkoutConversionRate =
-    checkouts.length > 0 ? ((orders.length / checkouts.length) * 100).toFixed(1) : "0.0";
+    checkoutCreateTokensLast30d.size > 0
+      ? (
+        (matchedOrdersLast30d / checkoutCreateTokensLast30d.size) *
+        100
+      ).toFixed(1)
+      : "0.0";
+
+  const checkoutToOrderRateLast30m =
+    checkoutsLast30m > 0
+      ? ((ordersLast30m / checkoutsLast30m) * 100).toFixed(1)
+      : "0.0";
+
+  const funnelChartData = [
+    {
+      stage: "Checkout Started",
+      value: uniqueCheckoutCreates,
+    },
+    {
+      stage: "Checkout Updated",
+      value: uniqueCheckoutUpdates,
+    },
+    {
+      stage: "Orders Completed",
+      value: totalOrders,
+    },
+  ];
+
+  const checkoutEventsSortedAsc = [...checkouts].sort(
+    (a, b) =>
+      new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+  );
+
+  type CheckoutChangeRow = {
+    checkout: (typeof checkouts)[number];
+    changedText: string;
+  };
+
+  const meaningfulCheckoutEvents: CheckoutChangeRow[] = [];
+  const lastVisibleStateByToken = new Map<
+    string,
+    {
+      value: string | null;
+      currency: string | null;
+      country: string | null;
+      device: string | null;
+    }
+  >();
+
+  for (const checkout of checkoutEventsSortedAsc) {
+    const token =
+      typeof checkout.checkoutToken === "string" &&
+        checkout.checkoutToken.trim().length > 0
+        ? checkout.checkoutToken
+        : `no-token-${checkout.id}`;
+
+    const currentState = {
+      value:
+        checkout.value !== null && checkout.value !== undefined
+          ? Number(checkout.value).toFixed(2)
+          : null,
+      currency: checkout.currency ?? null,
+      country: checkout.country ?? null,
+      device: checkout.device ?? null,
+    };
+
+    const previousState = lastVisibleStateByToken.get(token);
+
+    if (!previousState) {
+      meaningfulCheckoutEvents.push({
+        checkout,
+        changedText: "Initial state",
+      });
+      lastVisibleStateByToken.set(token, currentState);
+      continue;
+    }
+
+    const changes: string[] = [];
+
+    if (previousState.value !== currentState.value) {
+      changes.push(
+        `Value: ${previousState.value ? `£${previousState.value}` : "-"
+        } → ${currentState.value ? `£${currentState.value}` : "-"}`,
+      );
+    }
+
+    if (previousState.currency !== currentState.currency) {
+      changes.push(
+        `Currency: ${previousState.currency ?? "-"} → ${currentState.currency ?? "-"
+        }`,
+      );
+    }
+
+    if (previousState.country !== currentState.country) {
+      changes.push(
+        `Country: ${previousState.country ?? "-"} → ${currentState.country ?? "-"
+        }`,
+      );
+    }
+
+    if (previousState.device !== currentState.device) {
+      changes.push(
+        `Device: ${previousState.device ?? "-"} → ${currentState.device ?? "-"
+        }`,
+      );
+    }
+
+    if (changes.length > 0) {
+      meaningfulCheckoutEvents.push({
+        checkout,
+        changedText: changes.join(" | "),
+      });
+      lastVisibleStateByToken.set(token, currentState);
+    }
+  }
+
+  const recentCheckoutRows = meaningfulCheckoutEvents
+    .sort(
+      (a, b) =>
+        new Date(b.checkout.createdAt).getTime() -
+        new Date(a.checkout.createdAt).getTime(),
+    )
+    .slice(0, 8)
+    .map(({ checkout, changedText }) => [
+      shortCheckoutToken(checkout.checkoutToken),
+      checkout.eventType,
+      checkout.value ? `£${Number(checkout.value).toFixed(2)}` : "-",
+      checkout.currency ?? "-",
+      checkout.country ?? "-",
+      checkout.device ?? "-",
+      changedText,
+      new Date(checkout.createdAt).toLocaleString(),
+    ]);
 
   return json({
     totalOrders,
@@ -223,10 +420,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     topProductsRows,
     alerts,
 
-    totalCheckouts: checkouts.length,
+    totalCheckouts: uniqueCheckoutCreates,
     checkoutsLast30m,
     ordersLast30m,
     checkoutConversionRate,
+    checkoutToOrderRateLast30m,
+    funnelChartData,
+    recentCheckoutRows,
   });
 };
 
@@ -250,6 +450,9 @@ export default function Dashboard() {
     checkoutsLast30m,
     ordersLast30m,
     checkoutConversionRate,
+    checkoutToOrderRateLast30m,
+    funnelChartData,
+    recentCheckoutRows,
   } = useLoaderData<typeof loader>();
 
   return (
@@ -362,22 +565,153 @@ export default function Dashboard() {
         <Layout>
           <Layout.Section>
             <Card>
-              <BlockStack gap="200">
+              <BlockStack gap="400">
                 <Text as="h2" variant="headingMd">
                   Checkout Funnel
                 </Text>
-                <Text as="p">
-                  Total checkouts captured: {totalCheckouts}
+
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                    gap: "16px",
+                  }}
+                >
+                  <div
+                    style={{
+                      padding: "16px",
+                      border: "1px solid #e1e3e5",
+                      borderRadius: "12px",
+                      background: "#f6f6f7",
+                    }}
+                  >
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      Checkout Events
+                    </Text>
+                    <div style={{ marginTop: "8px" }}>
+                      <Text as="p" variant="headingLg">
+                        {totalCheckouts}
+                      </Text>
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      padding: "16px",
+                      border: "1px solid #e1e3e5",
+                      borderRadius: "12px",
+                      background: "#f6f6f7",
+                    }}
+                  >
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      Recent Checkouts
+                    </Text>
+                    <div style={{ marginTop: "8px" }}>
+                      <Text as="p" variant="headingLg">
+                        {checkoutsLast30m}
+                      </Text>
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      padding: "16px",
+                      border: "1px solid #e1e3e5",
+                      borderRadius: "12px",
+                      background: "#f6f6f7",
+                    }}
+                  >
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      Recent Orders
+                    </Text>
+                    <div style={{ marginTop: "8px" }}>
+                      <Text as="p" variant="headingLg">
+                        {ordersLast30m}
+                      </Text>
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      padding: "16px",
+                      border: "1px solid #e1e3e5",
+                      borderRadius: "12px",
+                      background: "#f6f6f7",
+                    }}
+                  >
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      Checkout-to-Order Rate
+                    </Text>
+                    <div style={{ marginTop: "8px" }}>
+                      <Text as="p" variant="headingLg">
+                        {checkoutConversionRate}%
+                      </Text>
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ width: "100%", height: 320 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={funnelChartData}>
+                      <XAxis dataKey="stage" />
+                      <YAxis />
+                      <Tooltip />
+                      <Bar dataKey="value" radius={[8, 8, 0, 0]}>
+                        <Cell fill="#008060" />
+                        <Cell fill="#2C6ECB" />
+                        <Cell fill="#6D7175" />
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+
+                <BlockStack gap="100">
+                  <Text as="p">
+                    Last 30 minutes conversion: {checkoutToOrderRateLast30m}%
+                  </Text>
+                </BlockStack>
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+        </Layout>
+
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="300">
+                <Text as="h2" variant="headingMd">
+                  Recent Checkout Activity
                 </Text>
-                <Text as="p">
-                  Checkouts in last 30 minutes: {checkoutsLast30m}
-                </Text>
-                <Text as="p">
-                  Orders in last 30 minutes: {ordersLast30m}
-                </Text>
-                <Text as="p">
-                  Overall checkout-to-order conversion: {checkoutConversionRate}%
-                </Text>
+
+                {recentCheckoutRows.length === 0 ? (
+                  <Text as="p" tone="subdued">
+                    No checkout activity yet.
+                  </Text>
+                ) : (
+                  <DataTable
+                    columnContentTypes={[
+                      "text",
+                      "text",
+                      "text",
+                      "text",
+                      "text",
+                      "text",
+                      "text",
+                      "text",
+                    ]}
+                    headings={[
+                      "Checkout Session",
+                      "Event Type",
+                      "Value",
+                      "Currency",
+                      "Country",
+                      "Device",
+                      "What Changed",
+                      "Created At",
+                    ]}
+                    rows={recentCheckoutRows}
+                  />
+                )}
               </BlockStack>
             </Card>
           </Layout.Section>
@@ -470,7 +804,12 @@ export default function Dashboard() {
 
                 <DataTable
                   columnContentTypes={["text", "text", "text", "text"]}
-                  headings={["Order ID", "Currency", "Total Price", "Created At"]}
+                  headings={[
+                    "Order ID",
+                    "Currency",
+                    "Total Price",
+                    "Created At",
+                  ]}
                   rows={recentOrders}
                 />
               </BlockStack>

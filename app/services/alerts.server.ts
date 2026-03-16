@@ -19,6 +19,11 @@ type CheckoutLike = {
     createdAt: Date | string;
 };
 
+type AlertRuleLike = {
+    code: string;
+    threshold?: string | null;
+};
+
 function isWithinLastHours(date: Date, hours: number) {
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
@@ -36,6 +41,7 @@ export { isWithinLastHours, isWithinLastDays };
 export function buildSmartAlerts(
     orders: OrderLike[],
     checkouts: CheckoutLike[] = [],
+    alertRules: AlertRuleLike[] = [],
 ): SmartAlert[] {
     const alerts: SmartAlert[] = [];
 
@@ -164,14 +170,19 @@ export function buildSmartAlerts(
         (order) => order.createdAt >= thirtyMinutesAgo,
     );
 
-    if (recentCheckouts.length >= 5 && recentOrders.length === 0) {
+    const checkoutRule = alertRules.find(
+        (rule) => rule.code === "CHECKOUT_CONVERSION_DROP",
+    );
+
+    const checkoutThreshold = Number(checkoutRule?.threshold ?? 5);
+
+    if (recentCheckouts.length >= checkoutThreshold && recentOrders.length === 0) {
         alerts.push({
             id: "checkout-conversion-drop",
             code: "CHECKOUT_CONVERSION_DROP",
             title: "Checkout conversion issue detected",
             severity: "critical",
-            description:
-                "Many customers started checkout recently, but no orders were completed in the last 30 minutes.",
+            description: `Many customers started checkout recently, but no orders were completed in the last 30 minutes. Threshold: ${checkoutThreshold} checkouts.`,
             metricValue: recentCheckouts.length,
         });
     }

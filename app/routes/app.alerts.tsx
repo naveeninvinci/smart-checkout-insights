@@ -48,9 +48,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
     const enabledCodes = new Set(enabledRules.map((rule) => rule.code));
 
-    const alerts = buildSmartAlerts(orders, checkouts).filter((alert) =>
-        enabledCodes.has(alert.code),
-    );
+    const alerts = buildSmartAlerts(
+        orders,
+        checkouts,
+        enabledRules,
+    ).filter((alert) => enabledCodes.has(alert.code));
 
     const alertHistory = shop
         ? await prisma.alertEvent.findMany({

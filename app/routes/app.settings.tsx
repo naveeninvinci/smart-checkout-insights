@@ -11,6 +11,7 @@ import {
     Button,
     InlineStack,
     Layout,
+    TextField,
 } from "@shopify/polaris";
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
@@ -72,6 +73,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
                 shopId: shop.id,
                 code: rule.code,
                 enabled: true,
+                threshold: rule.code === "CHECKOUT_CONVERSION_DROP" ? "5" : null,
             },
         });
     }
@@ -89,6 +91,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
             label: defaultRule.label,
             description: defaultRule.description,
             enabled: savedRule?.enabled ?? true,
+            threshold:
+                defaultRule.code === "CHECKOUT_CONVERSION_DROP"
+                    ? savedRule?.threshold ?? "5"
+                    : "",
         };
     });
 
@@ -111,6 +117,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     for (const rule of DEFAULT_RULES) {
         const enabled = formData.get(rule.code) === "on";
 
+        const threshold =
+            rule.code === "CHECKOUT_CONVERSION_DROP"
+                ? String(formData.get(`${rule.code}_threshold`) || "5")
+                : null;
+
         await prisma.alertRule.upsert({
             where: {
                 shopId_code: {
@@ -120,11 +131,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             },
             update: {
                 enabled,
+                threshold,
             },
             create: {
                 shopId: shop.id,
                 code: rule.code,
                 enabled,
+                threshold,
             },
         });
     }
@@ -139,11 +152,21 @@ export default function SettingsPage() {
     const { rules } = useLoaderData<typeof loader>();
     const actionData = useActionData<typeof action>();
 
-    const initialState = useMemo(() => {
+    const initialEnabledState = useMemo(() => {
         return Object.fromEntries(rules.map((rule) => [rule.code, rule.enabled]));
     }, [rules]);
 
-    const [ruleState, setRuleState] = useState<Record<string, boolean>>(initialState);
+    const initialThresholdState = useMemo(() => {
+        return Object.fromEntries(
+            rules.map((rule) => [rule.code, rule.threshold ?? ""]),
+        );
+    }, [rules]);
+
+    const [ruleState, setRuleState] =
+        useState<Record<string, boolean>>(initialEnabledState);
+
+    const [thresholdState, setThresholdState] =
+        useState<Record<string, string>>(initialThresholdState);
 
     return (
         <Page title="Settings">
@@ -182,6 +205,29 @@ export default function SettingsPage() {
                                                 <Text as="p" tone="subdued">
                                                     {rule.description}
                                                 </Text>
+
+                                                {rule.code === "CHECKOUT_CONVERSION_DROP" && (
+                                                    <>
+                                                        <TextField
+                                                            label="Checkout threshold"
+                                                            type="number"
+                                                            autoComplete="off"
+                                                            value={thresholdState[rule.code] ?? "5"}
+                                                            onChange={(value) => {
+                                                                setThresholdState((prev) => ({
+                                                                    ...prev,
+                                                                    [rule.code]: value,
+                                                                }));
+                                                            }}
+                                                            helpText="Trigger this alert when recent checkouts reach this number and no orders are completed."
+                                                        />
+                                                        <input
+                                                            type="hidden"
+                                                            name={`${rule.code}_threshold`}
+                                                            value={thresholdState[rule.code] ?? "5"}
+                                                        />
+                                                    </>
+                                                )}
                                             </BlockStack>
                                         </Card>
                                     ))}

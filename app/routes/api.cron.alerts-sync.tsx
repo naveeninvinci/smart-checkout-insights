@@ -47,9 +47,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
         const enabledCodes = new Set(enabledRules.map((rule) => rule.code));
 
-        const currentAlerts = buildSmartAlerts(orders, checkouts).filter((alert) =>
-            enabledCodes.has(alert.code),
-        );
+        const currentAlerts = buildSmartAlerts(
+            orders,
+            checkouts,
+            enabledRules,
+        ).filter((alert) => enabledCodes.has(alert.code));
 
         const currentCodes = new Set(currentAlerts.map((alert) => alert.code));
 
