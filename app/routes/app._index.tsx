@@ -523,7 +523,7 @@ export default function Dashboard() {
         </Layout>
 
         <Layout>
-          <Layout.Section oneHalf>
+          <Layout.Section variant="oneHalf">
             <Card>
               <BlockStack gap="300">
                 <Text as="h2" variant="headingMd">
@@ -543,7 +543,7 @@ export default function Dashboard() {
             </Card>
           </Layout.Section>
 
-          <Layout.Section oneHalf>
+          <Layout.Section variant="oneHalf">
             <Card>
               <BlockStack gap="300">
                 <Text as="h2" variant="headingMd">
@@ -760,7 +760,7 @@ export default function Dashboard() {
         </Layout>
 
         <Layout>
-          <Layout.Section oneHalf>
+          <Layout.Section variant="oneHalf">
             <Card>
               <BlockStack gap="300">
                 <Text as="h2" variant="headingMd">
@@ -775,7 +775,7 @@ export default function Dashboard() {
             </Card>
           </Layout.Section>
 
-          <Layout.Section oneHalf>
+          <Layout.Section variant="oneHalf">
             <Card>
               <BlockStack gap="300">
                 <Text as="h2" variant="headingMd">
