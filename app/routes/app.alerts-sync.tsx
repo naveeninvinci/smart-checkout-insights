@@ -5,6 +5,7 @@ import { Page, Card, Text, BlockStack, Button } from "@shopify/polaris";
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
 import { buildSmartAlerts } from "../services/alerts.server";
+import { sendAlertSummaryEmail } from "../services/email.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
     await authenticate.admin(request);
@@ -47,7 +48,39 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         enabledRules,
     ).filter((alert) => enabledCodes.has(alert.code));
 
+    const currentCodes = new Set(alerts.map((alert) => alert.code));
+
+    const existingActiveAlerts = await prisma.alertEvent.findMany({
+        where: {
+            shopId: shop.id,
+            status: "active",
+        },
+    });
+
+    let resolvedCount = 0;
     let createdCount = 0;
+    let emailsSent = 0;
+
+    for (const existing of existingActiveAlerts) {
+        if (!currentCodes.has(existing.code)) {
+            await prisma.alertEvent.update({
+                where: { id: existing.id },
+                data: {
+                    status: "resolved",
+                    resolvedAt: new Date(),
+                },
+            });
+
+            resolvedCount += 1;
+        }
+    }
+
+    const newlyCreatedAlerts: Array<{
+        title: string;
+        severity: string;
+        description: string;
+        metricValue?: string | number | null;
+    }> = [];
 
     for (const alert of alerts) {
         const existing = await prisma.alertEvent.findFirst({
@@ -73,13 +106,40 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             });
 
             createdCount += 1;
+
+            newlyCreatedAlerts.push({
+                title: alert.title,
+                severity: alert.severity,
+                description: alert.description,
+                metricValue:
+                    alert.metricValue !== undefined ? alert.metricValue : null,
+            });
+        }
+    }
+
+    if (
+        shop.alertEmailsEnabled &&
+        shop.alertEmail &&
+        newlyCreatedAlerts.length > 0
+    ) {
+        try {
+            await sendAlertSummaryEmail({
+                to: shop.alertEmail,
+                shopDomain: shop.shopDomain,
+                alerts: newlyCreatedAlerts,
+            });
+            emailsSent += 1;
+        } catch (error) {
+            console.error("Failed to send alert summary email:", error);
         }
     }
 
     return json({
         ok: true,
         created: createdCount,
+        resolved: resolvedCount,
         totalGenerated: alerts.length,
+        emailsSent,
     });
 };
 
@@ -105,11 +165,15 @@ export default function AlertsSyncPage() {
 
                     {fetcher.data?.ok === true &&
                         "created" in fetcher.data &&
-                        "totalGenerated" in fetcher.data && (
+                        "resolved" in fetcher.data &&
+                        "totalGenerated" in fetcher.data &&
+                        "emailsSent" in fetcher.data && (
                             <Text as="p">
                                 Alerts synced successfully. New alerts created:{" "}
-                                {fetcher.data.created}. Total generated:{" "}
-                                {fetcher.data.totalGenerated}.
+                                {fetcher.data.created}. Alerts resolved:{" "}
+                                {fetcher.data.resolved}. Total generated:{" "}
+                                {fetcher.data.totalGenerated}. Summary emails sent:{" "}
+                                {fetcher.data.emailsSent}.
                             </Text>
                         )}
 

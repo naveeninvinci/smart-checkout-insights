@@ -461,6 +461,29 @@ export default function Dashboard() {
         <Layout>
           <Layout.Section>
             <Card>
+              <BlockStack gap="300">
+                <Text as="h2" variant="headingMd">
+                  Smart Alerts
+                </Text>
+
+                {alerts.length === 0 ? (
+                  <Text as="p" tone="subdued">
+                    No alerts detected.
+                  </Text>
+                ) : (
+                  alerts.map((alert, index) => (
+                    <Text key={index} as="p">
+                      {alert}
+                    </Text>
+                  ))
+                )}
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+        </Layout>
+        <Layout>
+          <Layout.Section>
+            <Card>
               <BlockStack gap="200">
                 <Text as="h2" variant="headingMd">
                   Total Orders
@@ -711,30 +734,6 @@ export default function Dashboard() {
                     ]}
                     rows={recentCheckoutRows}
                   />
-                )}
-              </BlockStack>
-            </Card>
-          </Layout.Section>
-        </Layout>
-
-        <Layout>
-          <Layout.Section>
-            <Card>
-              <BlockStack gap="300">
-                <Text as="h2" variant="headingMd">
-                  Smart Alerts
-                </Text>
-
-                {alerts.length === 0 ? (
-                  <Text as="p" tone="subdued">
-                    No alerts detected.
-                  </Text>
-                ) : (
-                  alerts.map((alert, index) => (
-                    <Text key={index} as="p">
-                      {alert}
-                    </Text>
-                  ))
                 )}
               </BlockStack>
             </Card>

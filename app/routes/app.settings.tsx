@@ -98,7 +98,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         };
     });
 
-    return json({ rules: rulesForUi });
+    return json({
+        rules: rulesForUi,
+        alertEmail: shop.alertEmail ?? "",
+        alertEmailsEnabled: shop.alertEmailsEnabled ?? true,
+    });
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -113,6 +117,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     const formData = await request.formData();
+    const alertEmail = String(formData.get("alertEmail") || "").trim();
+    const alertEmailsEnabled = formData.get("alertEmailsEnabled") === "on";
+
+    await prisma.shop.update({
+        where: { id: shop.id },
+        data: {
+            alertEmail: alertEmail.length > 0 ? alertEmail : null,
+            alertEmailsEnabled,
+        },
+    });
 
     for (const rule of DEFAULT_RULES) {
         const enabled = formData.get(rule.code) === "on";
@@ -149,7 +163,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function SettingsPage() {
-    const { rules } = useLoaderData<typeof loader>();
+    const { rules, alertEmail, alertEmailsEnabled } =
+        useLoaderData<typeof loader>();
     const actionData = useActionData<typeof action>();
 
     const initialEnabledState = useMemo(() => {
@@ -168,6 +183,10 @@ export default function SettingsPage() {
     const [thresholdState, setThresholdState] =
         useState<Record<string, string>>(initialThresholdState);
 
+    const [alertEmailState, setAlertEmailState] = useState(alertEmail);
+    const [emailAlertsEnabledState, setEmailAlertsEnabledState] =
+        useState(alertEmailsEnabled);
+
     return (
         <Page title="Settings">
             <Layout>
@@ -184,6 +203,41 @@ export default function SettingsPage() {
 
                             <Form method="post">
                                 <BlockStack gap="400">
+                                    <Card>
+                                        <BlockStack gap="300">
+                                            <Checkbox
+                                                label="Enable email notifications"
+                                                checked={emailAlertsEnabledState}
+                                                onChange={setEmailAlertsEnabledState}
+                                                helpText="Turn email alerts on or off for this store."
+                                            />
+
+                                            {emailAlertsEnabledState && (
+                                                <input
+                                                    type="hidden"
+                                                    name="alertEmailsEnabled"
+                                                    value="on"
+                                                />
+                                            )}
+
+                                            <TextField
+                                                label="Alert email address"
+                                                type="email"
+                                                autoComplete="email"
+                                                value={alertEmailState}
+                                                onChange={setAlertEmailState}
+                                                helpText="New alerts will be emailed to this address."
+                                                disabled={!emailAlertsEnabledState}
+                                            />
+
+                                            <input
+                                                type="hidden"
+                                                name="alertEmail"
+                                                value={alertEmailState}
+                                            />
+                                        </BlockStack>
+                                    </Card>
+
                                     {rules.map((rule) => (
                                         <Card key={rule.code}>
                                             <BlockStack gap="200">

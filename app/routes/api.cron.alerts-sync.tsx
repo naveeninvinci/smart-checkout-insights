@@ -2,6 +2,7 @@ import type { ActionFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import prisma from "../db.server";
 import { buildSmartAlerts } from "../services/alerts.server";
+import { sendAlertSummaryEmail } from "../services/email.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
     const authHeader = request.headers.get("authorization");
@@ -26,6 +27,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     let totalAlertsGenerated = 0;
     let totalAlertsCreated = 0;
     let totalAlertsResolved = 0;
+    let totalEmailsSent = 0;
 
     for (const shop of shops) {
         const orders = await prisma.orderEvent.findMany({
@@ -79,6 +81,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             }
         }
 
+        const newlyCreatedAlerts: Array<{
+            title: string;
+            severity: string;
+            description: string;
+            metricValue?: string | number | null;
+        }> = [];
+
         for (const alert of currentAlerts) {
             const existing = await prisma.alertEvent.findFirst({
                 where: {
@@ -105,6 +114,31 @@ export const action = async ({ request }: ActionFunctionArgs) => {
                 });
 
                 totalAlertsCreated += 1;
+
+                newlyCreatedAlerts.push({
+                    title: alert.title,
+                    severity: alert.severity,
+                    description: alert.description,
+                    metricValue:
+                        alert.metricValue !== undefined ? alert.metricValue : null,
+                });
+            }
+        }
+
+        if (
+            shop.alertEmailsEnabled &&
+            shop.alertEmail &&
+            newlyCreatedAlerts.length > 0
+        ) {
+            try {
+                await sendAlertSummaryEmail({
+                    to: shop.alertEmail,
+                    shopDomain: shop.shopDomain,
+                    alerts: newlyCreatedAlerts,
+                });
+                totalEmailsSent += 1;
+            } catch (error) {
+                console.error("Failed to send alert summary email:", error);
             }
         }
     }
@@ -115,6 +149,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         alertsGenerated: totalAlertsGenerated,
         alertsCreated: totalAlertsCreated,
         alertsResolved: totalAlertsResolved,
+        emailsSent: totalEmailsSent,
         ranAt: new Date().toISOString(),
     });
 };
