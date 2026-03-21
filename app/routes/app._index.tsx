@@ -9,6 +9,7 @@ import {
   BlockStack,
   InlineStack,
   DataTable,
+  Badge,
 } from "@shopify/polaris";
 import {
   LineChart,
@@ -40,6 +41,18 @@ function shortCheckoutToken(token: string | null) {
   if (!token || token.trim().length === 0) return "-";
   if (token.length <= 12) return token;
   return `${token.slice(0, 8)}...${token.slice(-4)}`;
+}
+
+function getStoreHealthTone(status: string): "success" | "warning" | "critical" {
+  switch (status) {
+    case "Healthy":
+      return "success";
+    case "Needs attention":
+      return "warning";
+    case "At risk":
+    default:
+      return "critical";
+  }
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -82,6 +95,40 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     enabledRules,
   ).filter((alert) => enabledCodes.has(alert.code));
 
+  const totalOrders = orders.length;
+
+  const totalRevenue = orders.reduce((sum, order) => {
+    return sum + Number(order.totalPrice ?? 0);
+  }, 0);
+
+  const averageOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
+
+  const latestOrder = orders[0] ?? null;
+
+  const ordersLast24hList = orders.filter((order) =>
+    isWithinLastHours(new Date(order.createdAt), 24),
+  );
+
+  const ordersLast7dList = orders.filter((order) =>
+    isWithinLastDays(new Date(order.createdAt), 7),
+  );
+
+  const ordersLast30dList = orders.filter((order) =>
+    isWithinLastDays(new Date(order.createdAt), 30),
+  );
+
+  const revenueLast24h = ordersLast24hList.reduce((sum, order) => {
+    return sum + Number(order.totalPrice ?? 0);
+  }, 0);
+
+  const revenueLast7d = ordersLast7dList.reduce((sum, order) => {
+    return sum + Number(order.totalPrice ?? 0);
+  }, 0);
+
+  const revenueLast30d = ordersLast30dList.reduce((sum, order) => {
+    return sum + Number(order.totalPrice ?? 0);
+  }, 0);
+
   const alerts = structuredAlerts.map((alert) => {
     switch (alert.code) {
       case "NO_ORDERS_24H":
@@ -99,39 +146,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }
   });
 
-  const totalOrders = orders.length;
+  const currentAlertCount = alerts.length;
 
-  const totalRevenue = orders.reduce((sum, order) => {
-    return sum + Number(order.totalPrice ?? 0);
-  }, 0);
-
-  const averageOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
-
-  const latestOrder = orders[0] ?? null;
-
-  const ordersLast24h = orders.filter((order) =>
-    isWithinLastHours(new Date(order.createdAt), 24),
-  );
-
-  const ordersLast7d = orders.filter((order) =>
-    isWithinLastDays(new Date(order.createdAt), 7),
-  );
-
-  const ordersLast30d = orders.filter((order) =>
-    isWithinLastDays(new Date(order.createdAt), 30),
-  );
-
-  const revenueLast24h = ordersLast24h.reduce((sum, order) => {
-    return sum + Number(order.totalPrice ?? 0);
-  }, 0);
-
-  const revenueLast7d = ordersLast7d.reduce((sum, order) => {
-    return sum + Number(order.totalPrice ?? 0);
-  }, 0);
-
-  const revenueLast30d = ordersLast30d.reduce((sum, order) => {
-    return sum + Number(order.totalPrice ?? 0);
-  }, 0);
+  const storeHealthStatus =
+    ordersLast24hList.length === 0
+      ? "At risk"
+      : structuredAlerts.some((alert) => alert.severity === "critical")
+        ? "Needs attention"
+        : "Healthy";
 
   const recentOrders = orders.slice(0, 5).map((order) => [
     order.orderId,
@@ -218,16 +240,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       ),
   );
 
-  const checkoutUpdateTokens = new Set(
-    checkouts
-      .filter((checkout) => checkout.eventType === "checkouts/update")
-      .map((checkout) => checkout.checkoutToken)
-      .filter(
-        (token): token is string =>
-          typeof token === "string" && token.trim().length > 0,
-      ),
-  );
-
   const recentCheckoutTokens = new Set(
     recentCheckoutEvents
       .map((checkout) => checkout.checkoutToken)
@@ -252,7 +264,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   );
 
   const uniqueCheckoutCreates = checkoutCreateTokens.size;
-  const uniqueCheckoutUpdates = checkoutUpdateTokens.size;
   const checkoutsLast30m = recentCheckoutTokens.size;
 
   const ordersLast30m = orders.filter(
@@ -282,10 +293,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     {
       stage: "Checkout Started",
       value: uniqueCheckoutCreates,
-    },
-    {
-      stage: "Checkout Updated",
-      value: uniqueCheckoutUpdates,
     },
     {
       stage: "Orders Completed",
@@ -346,29 +353,25 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
     if (previousState.value !== currentState.value) {
       changes.push(
-        `Value: ${previousState.value ? `£${previousState.value}` : "-"
-        } → ${currentState.value ? `£${currentState.value}` : "-"}`,
+        `Value: ${previousState.value ? `£${previousState.value}` : "-"} → ${currentState.value ? `£${currentState.value}` : "-"}`,
       );
     }
 
     if (previousState.currency !== currentState.currency) {
       changes.push(
-        `Currency: ${previousState.currency ?? "-"} → ${currentState.currency ?? "-"
-        }`,
+        `Currency: ${previousState.currency ?? "-"} → ${currentState.currency ?? "-"}`,
       );
     }
 
     if (previousState.country !== currentState.country) {
       changes.push(
-        `Country: ${previousState.country ?? "-"} → ${currentState.country ?? "-"
-        }`,
+        `Country: ${previousState.country ?? "-"} → ${currentState.country ?? "-"}`,
       );
     }
 
     if (previousState.device !== currentState.device) {
       changes.push(
-        `Device: ${previousState.device ?? "-"} → ${currentState.device ?? "-"
-        }`,
+        `Device: ${previousState.device ?? "-"} → ${currentState.device ?? "-"}`,
       );
     }
 
@@ -407,9 +410,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       ? new Date(latestOrder.createdAt).toLocaleString()
       : "No orders yet",
 
-    ordersLast24h: ordersLast24h.length,
-    ordersLast7d: ordersLast7d.length,
-    ordersLast30d: ordersLast30d.length,
+    ordersLast24h: ordersLast24hList.length,
+    ordersLast7d: ordersLast7dList.length,
+    ordersLast30d: ordersLast30dList.length,
 
     revenueLast24h: revenueLast24h.toFixed(2),
     revenueLast7d: revenueLast7d.toFixed(2),
@@ -427,6 +430,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     checkoutToOrderRateLast30m,
     funnelChartData,
     recentCheckoutRows,
+
+    currentAlertCount,
+    storeHealthStatus,
   });
 };
 
@@ -453,6 +459,8 @@ export default function Dashboard() {
     checkoutToOrderRateLast30m,
     funnelChartData,
     recentCheckoutRows,
+    currentAlertCount,
+    storeHealthStatus,
   } = useLoaderData<typeof loader>();
 
   return (
@@ -460,126 +468,125 @@ export default function Dashboard() {
       <BlockStack gap="500">
         <Layout>
           <Layout.Section>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                gap: "16px",
+              }}
+            >
+              <Card>
+                <BlockStack gap="100">
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    Total Revenue
+                  </Text>
+                  <Text as="p" variant="heading2xl">
+                    £{totalRevenue}
+                  </Text>
+                </BlockStack>
+              </Card>
+
+              <Card>
+                <BlockStack gap="100">
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    Total Orders
+                  </Text>
+                  <Text as="p" variant="heading2xl">
+                    {totalOrders}
+                  </Text>
+                </BlockStack>
+              </Card>
+
+              <Card>
+                <BlockStack gap="100">
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    Checkout-to-Order Rate
+                  </Text>
+                  <Text as="p" variant="heading2xl">
+                    {checkoutConversionRate}%
+                  </Text>
+                </BlockStack>
+              </Card>
+
+              <Card>
+                <BlockStack gap="100">
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    Average Order Value
+                  </Text>
+                  <Text as="p" variant="heading2xl">
+                    £{averageOrderValue}
+                  </Text>
+                </BlockStack>
+              </Card>
+            </div>
+          </Layout.Section>
+        </Layout>
+
+        <Layout>
+          <Layout.Section oneHalf>
             <Card>
               <BlockStack gap="300">
                 <Text as="h2" variant="headingMd">
-                  Smart Alerts
+                  Performance Summary
                 </Text>
 
-                {alerts.length === 0 ? (
-                  <Text as="p" tone="subdued">
-                    No alerts detected.
-                  </Text>
-                ) : (
-                  alerts.map((alert, index) => (
-                    <Text key={index} as="p">
-                      {alert}
+                <DataTable
+                  columnContentTypes={["text", "numeric", "numeric"]}
+                  headings={["Period", "Orders", "Revenue"]}
+                  rows={[
+                    ["Last 24h", <strong>{ordersLast24h}</strong>, <strong>£{revenueLast24h}</strong>],
+                    ["Last 7d", <strong>{ordersLast7d}</strong>, <strong>£{revenueLast7d}</strong>],
+                    ["Last 30d", <strong>{ordersLast30d}</strong>, <strong>£{revenueLast30d}</strong>],
+                  ]}
+                />
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+
+          <Layout.Section oneHalf>
+            <Card>
+              <BlockStack gap="300">
+                <Text as="h2" variant="headingMd">
+                  Store Health
+                </Text>
+
+                <BlockStack gap="200">
+                  <InlineStack align="space-between">
+                    <Text as="p" tone="subdued">
+                      Status
                     </Text>
-                  ))
-                )}
-              </BlockStack>
-            </Card>
-          </Layout.Section>
-        </Layout>
-        <Layout>
-          <Layout.Section>
-            <Card>
-              <BlockStack gap="200">
-                <Text as="h2" variant="headingMd">
-                  Total Orders
-                </Text>
-                <Text as="p" variant="heading2xl">
-                  {totalOrders}
-                </Text>
-              </BlockStack>
-            </Card>
-          </Layout.Section>
+                    <Badge tone={getStoreHealthTone(storeHealthStatus)}>
+                      {storeHealthStatus}
+                    </Badge>
+                  </InlineStack>
 
-          <Layout.Section>
-            <Card>
-              <BlockStack gap="200">
-                <Text as="h2" variant="headingMd">
-                  Total Revenue
-                </Text>
-                <Text as="p" variant="heading2xl">
-                  £{totalRevenue}
-                </Text>
-              </BlockStack>
-            </Card>
-          </Layout.Section>
+                  <InlineStack align="space-between">
+                    <Text as="p" tone="subdued">
+                      Last order time
+                    </Text>
+                    <Text as="p" variant="bodyMd">
+                      {latestOrderTime}
+                    </Text>
+                  </InlineStack>
 
-          <Layout.Section>
-            <Card>
-              <BlockStack gap="200">
-                <Text as="h2" variant="headingMd">
-                  Average Order Value
-                </Text>
-                <Text as="p" variant="heading2xl">
-                  £{averageOrderValue}
-                </Text>
-              </BlockStack>
-            </Card>
-          </Layout.Section>
+                  <InlineStack align="space-between">
+                    <Text as="p" tone="subdued">
+                      Orders in last 24h
+                    </Text>
+                    <Text as="p" variant="bodyMd">
+                      {ordersLast24h}
+                    </Text>
+                  </InlineStack>
 
-          <Layout.Section>
-            <Card>
-              <BlockStack gap="200">
-                <Text as="h2" variant="headingMd">
-                  Latest Order Time
-                </Text>
-                <Text as="p" variant="bodyLg">
-                  {latestOrderTime}
-                </Text>
-              </BlockStack>
-            </Card>
-          </Layout.Section>
-        </Layout>
-
-        <Layout>
-          <Layout.Section>
-            <Card>
-              <BlockStack gap="200">
-                <Text as="h2" variant="headingMd">
-                  Orders in Last 24h
-                </Text>
-                <Text as="p" variant="heading2xl">
-                  {ordersLast24h}
-                </Text>
-                <Text as="p" tone="subdued">
-                  Revenue: £{revenueLast24h}
-                </Text>
-              </BlockStack>
-            </Card>
-          </Layout.Section>
-
-          <Layout.Section>
-            <Card>
-              <BlockStack gap="200">
-                <Text as="h2" variant="headingMd">
-                  Orders in Last 7d
-                </Text>
-                <Text as="p" variant="heading2xl">
-                  {ordersLast7d}
-                </Text>
-                <Text as="p" tone="subdued">
-                  Revenue: £{revenueLast7d}
-                </Text>
-              </BlockStack>
-            </Card>
-          </Layout.Section>
-
-          <Layout.Section>
-            <Card>
-              <BlockStack gap="200">
-                <Text as="h2" variant="headingMd">
-                  Orders in Last 30d
-                </Text>
-                <Text as="p" variant="heading2xl">
-                  {ordersLast30d}
-                </Text>
-                <Text as="p" tone="subdued">
-                  Revenue: £{revenueLast30d}
-                </Text>
+                  <InlineStack align="space-between">
+                    <Text as="p" tone="subdued">
+                      Active alerts
+                    </Text>
+                    <Text as="p" variant="bodyMd">
+                      {currentAlertCount}
+                    </Text>
+                  </InlineStack>
+                </BlockStack>
               </BlockStack>
             </Card>
           </Layout.Section>
@@ -600,77 +607,38 @@ export default function Dashboard() {
                     gap: "16px",
                   }}
                 >
-                  <div
-                    style={{
-                      padding: "16px",
-                      border: "1px solid #e1e3e5",
-                      borderRadius: "12px",
-                      background: "#f6f6f7",
-                    }}
-                  >
-                    <Text as="p" variant="bodySm" tone="subdued">
-                      Checkout Events
-                    </Text>
-                    <div style={{ marginTop: "8px" }}>
+                  <Card>
+                    <BlockStack gap="100">
+                      <Text as="p" variant="bodySm" tone="subdued">
+                        Checkout Starts
+                      </Text>
                       <Text as="p" variant="headingLg">
                         {totalCheckouts}
                       </Text>
-                    </div>
-                  </div>
+                    </BlockStack>
+                  </Card>
 
-                  <div
-                    style={{
-                      padding: "16px",
-                      border: "1px solid #e1e3e5",
-                      borderRadius: "12px",
-                      background: "#f6f6f7",
-                    }}
-                  >
-                    <Text as="p" variant="bodySm" tone="subdued">
-                      Recent Checkouts
-                    </Text>
-                    <div style={{ marginTop: "8px" }}>
+                  <Card>
+                    <BlockStack gap="100">
+                      <Text as="p" variant="bodySm" tone="subdued">
+                        Recent Checkouts
+                      </Text>
                       <Text as="p" variant="headingLg">
                         {checkoutsLast30m}
                       </Text>
-                    </div>
-                  </div>
+                    </BlockStack>
+                  </Card>
 
-                  <div
-                    style={{
-                      padding: "16px",
-                      border: "1px solid #e1e3e5",
-                      borderRadius: "12px",
-                      background: "#f6f6f7",
-                    }}
-                  >
-                    <Text as="p" variant="bodySm" tone="subdued">
-                      Recent Orders
-                    </Text>
-                    <div style={{ marginTop: "8px" }}>
+                  <Card>
+                    <BlockStack gap="100">
+                      <Text as="p" variant="bodySm" tone="subdued">
+                        Recent Orders
+                      </Text>
                       <Text as="p" variant="headingLg">
                         {ordersLast30m}
                       </Text>
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      padding: "16px",
-                      border: "1px solid #e1e3e5",
-                      borderRadius: "12px",
-                      background: "#f6f6f7",
-                    }}
-                  >
-                    <Text as="p" variant="bodySm" tone="subdued">
-                      Checkout-to-Order Rate
-                    </Text>
-                    <div style={{ marginTop: "8px" }}>
-                      <Text as="p" variant="headingLg">
-                        {checkoutConversionRate}%
-                      </Text>
-                    </div>
-                  </div>
+                    </BlockStack>
+                  </Card>
                 </div>
 
                 <div style={{ width: "100%", height: 320 }}>
@@ -681,18 +649,11 @@ export default function Dashboard() {
                       <Tooltip />
                       <Bar dataKey="value" radius={[8, 8, 0, 0]}>
                         <Cell fill="#008060" />
-                        <Cell fill="#2C6ECB" />
                         <Cell fill="#6D7175" />
                       </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
-
-                <BlockStack gap="100">
-                  <Text as="p">
-                    Last 30 minutes conversion: {checkoutToOrderRateLast30m}%
-                  </Text>
-                </BlockStack>
               </BlockStack>
             </Card>
           </Layout.Section>
@@ -703,7 +664,65 @@ export default function Dashboard() {
             <Card>
               <BlockStack gap="300">
                 <Text as="h2" variant="headingMd">
-                  Recent Checkout Activity
+                  Revenue Trend
+                </Text>
+
+                {revenueChartData.length === 0 ? (
+                  <Text as="p" tone="subdued">
+                    No revenue data yet.
+                  </Text>
+                ) : (
+                  <div style={{ width: "100%", height: 300 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={revenueChartData}>
+                        <XAxis dataKey="date" />
+                        <YAxis />
+                        <Tooltip />
+                        <Line
+                          type="monotone"
+                          dataKey="revenue"
+                          stroke="#008060"
+                          strokeWidth={3}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+        </Layout>
+
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="300">
+                <Text as="h2" variant="headingMd">
+                  Smart Alerts
+                </Text>
+
+                {alerts.length === 0 ? (
+                  <Text as="p" tone="subdued">
+                    No alerts right now.
+                  </Text>
+                ) : (
+                  alerts.map((alert, index) => (
+                    <Text key={index} as="p">
+                      {alert}
+                    </Text>
+                  ))
+                )}
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+        </Layout>
+
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="300">
+                <Text as="h2" variant="headingMd">
+                  Checkout Activity
                 </Text>
 
                 {recentCheckoutRows.length === 0 ? (
@@ -741,45 +760,11 @@ export default function Dashboard() {
         </Layout>
 
         <Layout>
-          <Layout.Section>
+          <Layout.Section oneHalf>
             <Card>
               <BlockStack gap="300">
                 <Text as="h2" variant="headingMd">
-                  Revenue Trend by Day
-                </Text>
-
-                {revenueChartData.length === 0 ? (
-                  <Text as="p" tone="subdued">
-                    No revenue data yet.
-                  </Text>
-                ) : (
-                  <div style={{ width: "100%", height: 300 }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={revenueChartData}>
-                        <XAxis dataKey="date" />
-                        <YAxis />
-                        <Tooltip />
-                        <Line
-                          type="monotone"
-                          dataKey="revenue"
-                          stroke="#008060"
-                          strokeWidth={3}
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-              </BlockStack>
-            </Card>
-          </Layout.Section>
-        </Layout>
-
-        <Layout>
-          <Layout.Section>
-            <Card>
-              <BlockStack gap="300">
-                <Text as="h2" variant="headingMd">
-                  Top Products by Revenue
+                  Top Performing Products
                 </Text>
                 <DataTable
                   columnContentTypes={["text", "text", "text"]}
@@ -789,17 +774,13 @@ export default function Dashboard() {
               </BlockStack>
             </Card>
           </Layout.Section>
-        </Layout>
 
-        <Layout>
-          <Layout.Section>
+          <Layout.Section oneHalf>
             <Card>
               <BlockStack gap="300">
-                <InlineStack align="space-between">
-                  <Text as="h2" variant="headingMd">
-                    Recent Orders
-                  </Text>
-                </InlineStack>
+                <Text as="h2" variant="headingMd">
+                  Recent Orders
+                </Text>
 
                 <DataTable
                   columnContentTypes={["text", "text", "text", "text"]}
