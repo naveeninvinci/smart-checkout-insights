@@ -70,6 +70,22 @@ function safeDropOffRate(fromCount: number, toCount: number) {
   return Number((((fromCount - toCount) / fromCount) * 100).toFixed(1));
 }
 
+function getAiInsightTone(
+  insightType: string,
+): "success" | "info" | "warning" | "critical" {
+  switch (insightType) {
+    case "positive":
+      return "success";
+    case "warning":
+      return "warning";
+    case "critical":
+      return "critical";
+    case "info":
+    default:
+      return "info";
+  }
+}
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
 
@@ -438,7 +454,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       `${startedToEngagedDropOffRate}%`,
     ],
     [
-      "Checkout engaged → Order completed",
+      "Checkout engaged → Matched order",
       String(engagedCheckoutCount),
       String(completedCheckoutCount),
       `${engagedToCompletedDropOffRate}%`,
@@ -453,6 +469,35 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       : structuredAlerts.some((alert) => alert.severity === "critical")
         ? "Needs attention"
         : "Healthy";
+
+  // AI-style insight layer
+  const hasRecentOrders = ordersLast24hList.length > 0;
+  const hasCriticalAlert = structuredAlerts.some(
+    (alert) => alert.severity === "critical",
+  );
+
+  let aiInsight = "ℹ Not enough data yet to generate insight.";
+  let aiInsightType: "info" | "warning" | "critical" | "positive" = "info";
+
+  if (engagedCheckoutCount > 0 && completedCheckoutCount === 0) {
+    aiInsight =
+      "🚨 All engaged checkout sessions are dropping off before turning into matched orders. This suggests a serious issue after customers interact with checkout.";
+    aiInsightType = "critical";
+  } else if (engagedToCompletedDropOffRate >= 70) {
+    aiInsight = `🔥 ${engagedToCompletedDropOffRate}% of engaged checkout sessions are dropping off before turning into matched orders. Customers are interacting with checkout, but most are not completing payment.`;
+    aiInsightType = "critical";
+  } else if (engagedToCompletedDropOffRate >= 40) {
+    aiInsight = `⚠ ${engagedToCompletedDropOffRate}% drop-off is happening after customers engage with checkout. This may indicate friction near payment or final confirmation.`;
+    aiInsightType = "warning";
+  } else if (hasRecentOrders && !hasCriticalAlert) {
+    aiInsight =
+      "✅ Checkout flow looks healthy right now. The store has recent orders and no critical conversion issues detected.";
+    aiInsightType = "positive";
+  } else if (!hasRecentOrders && currentAlertCount > 0) {
+    aiInsight =
+      "⚠ The store has no recent orders and active alerts are present. It may be worth reviewing checkout behaviour and recent traffic quality.";
+    aiInsightType = "warning";
+  }
 
   return json({
     totalOrders,
@@ -491,6 +536,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     startedToEngagedDropOffRate,
     engagedToCompletedDropOffRate,
     engagementRows,
+
+    aiInsight,
+    aiInsightType,
   });
 };
 
@@ -524,6 +572,8 @@ export default function Dashboard() {
     startedToEngagedDropOffRate,
     engagedToCompletedDropOffRate,
     engagementRows,
+    aiInsight,
+    aiInsightType,
   } = useLoaderData<typeof loader>();
 
   return (
@@ -771,7 +821,7 @@ export default function Dashboard() {
                   <Card>
                     <BlockStack gap="100">
                       <Text as="p" variant="bodySm" tone="subdued">
-                        Completed
+                        Matched Orders
                       </Text>
                       <Text as="p" variant="headingLg">
                         {completedCheckoutCount}
@@ -792,6 +842,12 @@ export default function Dashboard() {
                   </Badge>
                   <Badge tone={getDropOffTone(engagedToCompletedDropOffRate)}>
                     Engaged → Completed drop-off: {engagedToCompletedDropOffRate}%
+                  </Badge>
+                </InlineStack>
+                <InlineStack align="space-between">
+                  <Text as="p">{aiInsight}</Text>
+                  <Badge tone={getAiInsightTone(aiInsightType)}>
+                    {aiInsightType}
                   </Badge>
                 </InlineStack>
               </BlockStack>
