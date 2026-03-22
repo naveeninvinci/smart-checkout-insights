@@ -636,7 +636,7 @@ export default function Dashboard() {
         </Layout>
 
         <Layout>
-          <Layout.Section oneHalf>
+          <Layout.Section variant="oneHalf">
             <Card>
               <BlockStack gap="300">
                 <Text as="h2" variant="headingMd">
@@ -656,7 +656,7 @@ export default function Dashboard() {
             </Card>
           </Layout.Section>
 
-          <Layout.Section oneHalf>
+          <Layout.Section variant="oneHalf">
             <Card>
               <BlockStack gap="300">
                 <Text as="h2" variant="headingMd">
@@ -743,7 +743,7 @@ export default function Dashboard() {
                   <Card>
                     <BlockStack gap="100">
                       <Text as="p" variant="bodySm" tone="subdued">
-                        Recent Checkouts
+                        Checkouts in last 30 mins
                       </Text>
                       <Text as="p" variant="headingLg">
                         {checkoutsLast30m}
@@ -754,7 +754,7 @@ export default function Dashboard() {
                   <Card>
                     <BlockStack gap="100">
                       <Text as="p" variant="bodySm" tone="subdued">
-                        Recent Orders
+                        Orders in last 30 mins
                       </Text>
                       <Text as="p" variant="headingLg">
                         {ordersLast30m}
@@ -838,11 +838,13 @@ export default function Dashboard() {
 
                 <InlineStack gap="300" align="start">
                   <Badge tone={getDropOffTone(startedToEngagedDropOffRate)}>
-                    Started → Engaged drop-off: {startedToEngagedDropOffRate}%
+                    {`Started → Engaged drop-off: ${startedToEngagedDropOffRate}%`}
                   </Badge>
+
                   <Badge tone={getDropOffTone(engagedToCompletedDropOffRate)}>
-                    Engaged → Completed drop-off: {engagedToCompletedDropOffRate}%
+                    {`Engaged → Completed drop-off: ${engagedToCompletedDropOffRate}%`}
                   </Badge>
+
                 </InlineStack>
                 <InlineStack align="space-between">
                   <Text as="p">{aiInsight}</Text>
@@ -956,7 +958,7 @@ export default function Dashboard() {
         </Layout>
 
         <Layout>
-          <Layout.Section oneHalf>
+          <Layout.Section variant="oneHalf">
             <Card>
               <BlockStack gap="300">
                 <Text as="h2" variant="headingMd">
@@ -971,7 +973,7 @@ export default function Dashboard() {
             </Card>
           </Layout.Section>
 
-          <Layout.Section oneHalf>
+          <Layout.Section variant="oneHalf">
             <Card>
               <BlockStack gap="300">
                 <Text as="h2" variant="headingMd">
