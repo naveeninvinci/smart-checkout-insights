@@ -43,7 +43,9 @@ function shortCheckoutToken(token: string | null) {
   return `${token.slice(0, 8)}...${token.slice(-4)}`;
 }
 
-function getStoreHealthTone(status: string): "success" | "warning" | "critical" {
+function getStoreHealthTone(
+  status: string,
+): "success" | "warning" | "critical" {
   switch (status) {
     case "Healthy":
       return "success";
@@ -53,6 +55,19 @@ function getStoreHealthTone(status: string): "success" | "warning" | "critical" 
     default:
       return "critical";
   }
+}
+
+function getDropOffTone(
+  percentage: number,
+): "success" | "warning" | "critical" {
+  if (percentage < 20) return "success";
+  if (percentage < 50) return "warning";
+  return "critical";
+}
+
+function safeDropOffRate(fromCount: number, toCount: number) {
+  if (fromCount <= 0) return 0;
+  return Number((((fromCount - toCount) / fromCount) * 100).toFixed(1));
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -95,6 +110,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     enabledRules,
   ).filter((alert) => enabledCodes.has(alert.code));
 
+  const alerts = structuredAlerts.map((alert) => {
+    switch (alert.code) {
+      case "NO_ORDERS_24H":
+        return "⚠ No orders in the last 24 hours.";
+      case "REVENUE_DROP_24H":
+        return "⚠ Revenue dropped significantly compared to the last 7 days.";
+      case "HIGH_ORDER_ACTIVITY_24H":
+        return "🔥 High order activity detected in the last 24 hours.";
+      case "TOP_PRODUCT_ACTIVE":
+        return `📈 ${alert.title}`;
+      case "CHECKOUT_CONVERSION_DROP":
+        return "🚨 Checkout conversion issue detected. Customers are starting checkout, but no orders were completed recently.";
+      default:
+        return `ℹ ${alert.title}`;
+    }
+  });
+
   const totalOrders = orders.length;
 
   const totalRevenue = orders.reduce((sum, order) => {
@@ -128,32 +160,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const revenueLast30d = ordersLast30dList.reduce((sum, order) => {
     return sum + Number(order.totalPrice ?? 0);
   }, 0);
-
-  const alerts = structuredAlerts.map((alert) => {
-    switch (alert.code) {
-      case "NO_ORDERS_24H":
-        return "⚠ No orders in the last 24 hours.";
-      case "REVENUE_DROP_24H":
-        return "⚠ Revenue dropped significantly compared to the last 7 days.";
-      case "HIGH_ORDER_ACTIVITY_24H":
-        return "🔥 High order activity detected in the last 24 hours.";
-      case "TOP_PRODUCT_ACTIVE":
-        return `📈 ${alert.title}`;
-      case "CHECKOUT_CONVERSION_DROP":
-        return "🚨 Checkout conversion issue detected. Customers are starting checkout, but no orders were completed recently.";
-      default:
-        return `ℹ ${alert.title}`;
-    }
-  });
-
-  const currentAlertCount = alerts.length;
-
-  const storeHealthStatus =
-    ordersLast24hList.length === 0
-      ? "At risk"
-      : structuredAlerts.some((alert) => alert.severity === "critical")
-        ? "Needs attention"
-        : "Healthy";
 
   const recentOrders = orders.slice(0, 5).map((order) => [
     order.orderId,
@@ -402,6 +408,52 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       new Date(checkout.createdAt).toLocaleString(),
     ]);
 
+  const engagedCheckoutTokens = new Set(
+    meaningfulCheckoutEvents
+      .map(({ checkout }) => checkout.checkoutToken)
+      .filter(
+        (token): token is string =>
+          typeof token === "string" && token.trim().length > 0,
+      ),
+  );
+
+  const engagedCheckoutCount = engagedCheckoutTokens.size;
+  const completedCheckoutCount = matchedOrdersLast30d;
+
+  const startedToEngagedDropOffRate = safeDropOffRate(
+    uniqueCheckoutCreates,
+    engagedCheckoutCount,
+  );
+
+  const engagedToCompletedDropOffRate = safeDropOffRate(
+    engagedCheckoutCount,
+    completedCheckoutCount,
+  );
+
+  const engagementRows = [
+    [
+      "Checkout started → Checkout engaged",
+      String(uniqueCheckoutCreates),
+      String(engagedCheckoutCount),
+      `${startedToEngagedDropOffRate}%`,
+    ],
+    [
+      "Checkout engaged → Order completed",
+      String(engagedCheckoutCount),
+      String(completedCheckoutCount),
+      `${engagedToCompletedDropOffRate}%`,
+    ],
+  ];
+
+  const currentAlertCount = alerts.length;
+
+  const storeHealthStatus =
+    ordersLast24hList.length === 0
+      ? "At risk"
+      : structuredAlerts.some((alert) => alert.severity === "critical")
+        ? "Needs attention"
+        : "Healthy";
+
   return json({
     totalOrders,
     totalRevenue: totalRevenue.toFixed(2),
@@ -433,6 +485,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
     currentAlertCount,
     storeHealthStatus,
+
+    engagedCheckoutCount,
+    completedCheckoutCount,
+    startedToEngagedDropOffRate,
+    engagedToCompletedDropOffRate,
+    engagementRows,
   });
 };
 
@@ -461,6 +519,11 @@ export default function Dashboard() {
     recentCheckoutRows,
     currentAlertCount,
     storeHealthStatus,
+    engagedCheckoutCount,
+    completedCheckoutCount,
+    startedToEngagedDropOffRate,
+    engagedToCompletedDropOffRate,
+    engagementRows,
   } = useLoaderData<typeof loader>();
 
   return (
@@ -523,7 +586,7 @@ export default function Dashboard() {
         </Layout>
 
         <Layout>
-          <Layout.Section variant="oneHalf">
+          <Layout.Section oneHalf>
             <Card>
               <BlockStack gap="300">
                 <Text as="h2" variant="headingMd">
@@ -534,16 +597,16 @@ export default function Dashboard() {
                   columnContentTypes={["text", "numeric", "numeric"]}
                   headings={["Period", "Orders", "Revenue"]}
                   rows={[
-                    ["Last 24h", <strong>{ordersLast24h}</strong>, <strong>£{revenueLast24h}</strong>],
-                    ["Last 7d", <strong>{ordersLast7d}</strong>, <strong>£{revenueLast7d}</strong>],
-                    ["Last 30d", <strong>{ordersLast30d}</strong>, <strong>£{revenueLast30d}</strong>],
+                    ["Last 24h", ordersLast24h, `£${revenueLast24h}`],
+                    ["Last 7d", ordersLast7d, `£${revenueLast7d}`],
+                    ["Last 30d", ordersLast30d, `£${revenueLast30d}`],
                   ]}
                 />
               </BlockStack>
             </Card>
           </Layout.Section>
 
-          <Layout.Section variant="oneHalf">
+          <Layout.Section oneHalf>
             <Card>
               <BlockStack gap="300">
                 <Text as="h2" variant="headingMd">
@@ -584,6 +647,15 @@ export default function Dashboard() {
                     </Text>
                     <Text as="p" variant="bodyMd">
                       {currentAlertCount}
+                    </Text>
+                  </InlineStack>
+
+                  <InlineStack align="space-between">
+                    <Text as="p" tone="subdued">
+                      Last 30 min conversion
+                    </Text>
+                    <Text as="p" variant="bodyMd">
+                      {checkoutToOrderRateLast30m}%
                     </Text>
                   </InlineStack>
                 </BlockStack>
@@ -654,6 +726,74 @@ export default function Dashboard() {
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+        </Layout>
+
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="400">
+                <Text as="h2" variant="headingMd">
+                  Checkout Engagement Insights
+                </Text>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                    gap: "16px",
+                  }}
+                >
+                  <Card>
+                    <BlockStack gap="100">
+                      <Text as="p" variant="bodySm" tone="subdued">
+                        Started
+                      </Text>
+                      <Text as="p" variant="headingLg">
+                        {totalCheckouts}
+                      </Text>
+                    </BlockStack>
+                  </Card>
+
+                  <Card>
+                    <BlockStack gap="100">
+                      <Text as="p" variant="bodySm" tone="subdued">
+                        Engaged
+                      </Text>
+                      <Text as="p" variant="headingLg">
+                        {engagedCheckoutCount}
+                      </Text>
+                    </BlockStack>
+                  </Card>
+
+                  <Card>
+                    <BlockStack gap="100">
+                      <Text as="p" variant="bodySm" tone="subdued">
+                        Completed
+                      </Text>
+                      <Text as="p" variant="headingLg">
+                        {completedCheckoutCount}
+                      </Text>
+                    </BlockStack>
+                  </Card>
+                </div>
+
+                <DataTable
+                  columnContentTypes={["text", "numeric", "numeric", "text"]}
+                  headings={["Stage Transition", "From", "To", "Drop-off Rate"]}
+                  rows={engagementRows}
+                />
+
+                <InlineStack gap="300" align="start">
+                  <Badge tone={getDropOffTone(startedToEngagedDropOffRate)}>
+                    Started → Engaged drop-off: {startedToEngagedDropOffRate}%
+                  </Badge>
+                  <Badge tone={getDropOffTone(engagedToCompletedDropOffRate)}>
+                    Engaged → Completed drop-off: {engagedToCompletedDropOffRate}%
+                  </Badge>
+                </InlineStack>
               </BlockStack>
             </Card>
           </Layout.Section>
@@ -760,7 +900,7 @@ export default function Dashboard() {
         </Layout>
 
         <Layout>
-          <Layout.Section variant="oneHalf">
+          <Layout.Section oneHalf>
             <Card>
               <BlockStack gap="300">
                 <Text as="h2" variant="headingMd">
@@ -775,7 +915,7 @@ export default function Dashboard() {
             </Card>
           </Layout.Section>
 
-          <Layout.Section variant="oneHalf">
+          <Layout.Section oneHalf>
             <Card>
               <BlockStack gap="300">
                 <Text as="h2" variant="headingMd">
