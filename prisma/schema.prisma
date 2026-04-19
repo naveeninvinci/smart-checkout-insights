@@ -71,6 +71,11 @@ model OrderEvent {
   lineItems     Json?
   createdAt     DateTime @default(now())
 
+  paymentGatewayNames Json?
+  primaryPaymentMethod String?
+  financialStatus     String?
+  sourceName          String?
+
   shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
 
   @@index([shopId, createdAt])
