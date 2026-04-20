@@ -21,6 +21,19 @@ export type DetectedRecoveredPaymentSwitch = {
     notes: string | null;
 };
 
+export type DetectedRecoveredPaymentRetry = {
+    retryRecovered: boolean;
+    gateway: string | null;
+    failedStatus: string | null;
+    failedKind: string | null;
+    failedAt: string | null;
+    failedErrorCode: string | null;
+    successfulStatus: string | null;
+    successfulKind: string | null;
+    successfulAt: string | null;
+    notes: string | null;
+};
+
 function normalizeGateway(value: string | null | undefined): string | null {
     if (!value) return null;
 
@@ -56,6 +69,11 @@ function isFailureStatus(status: string | null | undefined): boolean {
     return s === "failure" || s === "error";
 }
 
+function isRefundKind(kind: string | null | undefined): boolean {
+    if (!kind) return false;
+    return kind.toLowerCase() === "refund";
+}
+
 function isCompletedLikeSuccess(tx: ShopifyTransactionLike): boolean {
     if (!tx.status) return false;
 
@@ -63,16 +81,11 @@ function isCompletedLikeSuccess(tx: ShopifyTransactionLike): boolean {
 
     if (status === "success") return true;
 
-    // Manual methods like COD / Bank Deposit may stay pending
-    // even though the order was successfully completed.
+    // Manual gateways like COD / Bank Deposit may remain pending
+    // even though the order is completed.
     if (status === "pending" && tx.manualPaymentGateway) return true;
 
     return false;
-}
-
-function isRefundKind(kind: string | null | undefined): boolean {
-    if (!kind) return false;
-    return kind.toLowerCase() === "refund";
 }
 
 export function detectRecoveredPaymentSwitch(
@@ -85,7 +98,6 @@ export function detectRecoveredPaymentSwitch(
     });
 
     const failures = sorted.filter((tx) => isFailureStatus(tx.status));
-
     const successfulTx = sorted.find(
         (tx) => isCompletedLikeSuccess(tx) && !isRefundKind(tx.kind),
     );
@@ -143,5 +155,74 @@ export function detectRecoveredPaymentSwitch(
         notes: switchDetected
             ? `A failed payment attempt was recorded before the order completed with ${normalizedSuccessGateway}.`
             : null,
+    };
+}
+
+export function detectRecoveredPaymentRetry(
+    transactions: ShopifyTransactionLike[],
+): DetectedRecoveredPaymentRetry {
+    const sorted = [...transactions].sort((a, b) => {
+        const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return timeA - timeB;
+    });
+
+    const failures = sorted.filter((tx) => isFailureStatus(tx.status));
+    const successfulTx = sorted.find(
+        (tx) => isCompletedLikeSuccess(tx) && !isRefundKind(tx.kind),
+    );
+
+    if (!successfulTx || failures.length === 0) {
+        return {
+            retryRecovered: false,
+            gateway: null,
+            failedStatus: failures[0]?.status ?? null,
+            failedKind: failures[0]?.kind ?? null,
+            failedAt: failures[0]?.createdAt ?? null,
+            failedErrorCode: failures[0]?.errorCode ?? null,
+            successfulStatus: successfulTx?.status ?? null,
+            successfulKind: successfulTx?.kind ?? null,
+            successfulAt: successfulTx?.createdAt ?? null,
+            notes: null,
+        };
+    }
+
+    const normalizedSuccessGateway = normalizeGateway(successfulTx.gateway ?? null);
+
+    const sameGatewayFailure = failures.find((tx) => {
+        const normalizedFailedGateway = normalizeGateway(tx.gateway ?? null);
+        return (
+            normalizedFailedGateway &&
+            normalizedSuccessGateway &&
+            normalizedFailedGateway === normalizedSuccessGateway
+        );
+    });
+
+    if (!sameGatewayFailure || !normalizedSuccessGateway) {
+        return {
+            retryRecovered: false,
+            gateway: normalizedSuccessGateway,
+            failedStatus: failures[0]?.status ?? null,
+            failedKind: failures[0]?.kind ?? null,
+            failedAt: failures[0]?.createdAt ?? null,
+            failedErrorCode: failures[0]?.errorCode ?? null,
+            successfulStatus: successfulTx?.status ?? null,
+            successfulKind: successfulTx?.kind ?? null,
+            successfulAt: successfulTx?.createdAt ?? null,
+            notes: null,
+        };
+    }
+
+    return {
+        retryRecovered: true,
+        gateway: normalizedSuccessGateway,
+        failedStatus: sameGatewayFailure.status ?? null,
+        failedKind: sameGatewayFailure.kind ?? null,
+        failedAt: sameGatewayFailure.createdAt ?? null,
+        failedErrorCode: sameGatewayFailure.errorCode ?? null,
+        successfulStatus: successfulTx.status ?? null,
+        successfulKind: successfulTx.kind ?? null,
+        successfulAt: successfulTx.createdAt ?? null,
+        notes: `A failed ${normalizedSuccessGateway} payment attempt later recovered on the same gateway.`,
     };
 }

@@ -79,6 +79,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         })
         : [];
 
+    const recoveredPaymentRetries = shop
+        ? await prisma.recoveredPaymentRetry.findMany({
+            where: {
+                shopId: shop.id,
+                retryRecovered: true,
+            },
+            orderBy: { createdAt: "desc" },
+            take: 10,
+        })
+        : [];
+
     const now = new Date();
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
@@ -189,12 +200,27 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         item.successfulAt ? new Date(item.successfulAt).toLocaleString() : "-",
     ]);
 
+    const recoveredRetryRows = recoveredPaymentRetries.map((item) => [
+        item.orderId,
+        shortCheckoutToken(item.checkoutToken),
+        item.gateway,
+        item.failedErrorCode ?? "-",
+        item.notes ?? "-",
+        item.successfulAt ? new Date(item.successfulAt).toLocaleString() : "-",
+    ]);
+
     let paymentInsight =
         "ℹ Not enough payment data yet to generate a strong payment insight.";
     let paymentInsightTone: "info" | "warning" | "critical" | "success" = "info";
 
-    if (recoveredPaymentSwitches.length > 0) {
-        paymentInsight = `⚠ ${recoveredPaymentSwitches.length} recovered payment switch event(s) detected recently. At least one order recorded a failed payment attempt before completing with another gateway.`;
+    if (recoveredPaymentSwitches.length > 0 && recoveredPaymentRetries.length > 0) {
+        paymentInsight = `⚠ ${recoveredPaymentSwitches.length} recovered switch event(s) and ${recoveredPaymentRetries.length} recovered retry event(s) detected recently. Customers are encountering payment friction, but some recover by switching methods while others retry successfully.`;
+        paymentInsightTone = "warning";
+    } else if (recoveredPaymentSwitches.length > 0) {
+        paymentInsight = `⚠ ${recoveredPaymentSwitches.length} recovered payment switch event(s) detected recently. Customers are failing on one method and completing with another.`;
+        paymentInsightTone = "warning";
+    } else if (recoveredPaymentRetries.length > 0) {
+        paymentInsight = `⚠ ${recoveredPaymentRetries.length} recovered payment retry event(s) detected recently. Customers are failing first, then succeeding on retry with the same method.`;
         paymentInsightTone = "warning";
     } else if (topRevenueMethod && topRevenueMethod.revenueShare >= 70) {
         paymentInsight = `⚠ ${topRevenueMethod.method} is driving ${topRevenueMethod.revenueShare.toFixed(
@@ -234,6 +260,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
             }
             : null,
         recoveredSwitchRows,
+        recoveredRetryRows,
     });
 };
 
@@ -247,6 +274,7 @@ export default function PaymentsInsightsPage() {
         topAovMethod,
         mostUsedMethod,
         recoveredSwitchRows,
+        recoveredRetryRows,
     } = useLoaderData<typeof loader>();
 
     return (
@@ -408,6 +436,44 @@ export default function PaymentsInsightsPage() {
                                             "Completed At",
                                         ]}
                                         rows={recoveredSwitchRows}
+                                    />
+                                )}
+                            </BlockStack>
+                        </Card>
+                    </Layout.Section>
+                </Layout>
+
+                <Layout>
+                    <Layout.Section>
+                        <Card>
+                            <BlockStack gap="300">
+                                <Text as="h2" variant="headingMd">
+                                    Recovered Payment Retries
+                                </Text>
+
+                                {recoveredRetryRows.length === 0 ? (
+                                    <Text as="p" tone="subdued">
+                                        No recovered payment retries detected yet.
+                                    </Text>
+                                ) : (
+                                    <DataTable
+                                        columnContentTypes={[
+                                            "text",
+                                            "text",
+                                            "text",
+                                            "text",
+                                            "text",
+                                            "text",
+                                        ]}
+                                        headings={[
+                                            "Order",
+                                            "Checkout",
+                                            "Gateway",
+                                            "Error Code",
+                                            "Notes",
+                                            "Recovered At",
+                                        ]}
+                                        rows={recoveredRetryRows}
                                     />
                                 )}
                             </BlockStack>

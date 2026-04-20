@@ -27,6 +27,7 @@ model Shop {
   checkoutEvents CheckoutEvent[]
   orderEvents    OrderEvent[]
   recoveredPaymentSwitches RecoveredPaymentSwitch[]
+  recoveredPaymentRetries RecoveredPaymentRetry[]
   alertEvents    AlertEvent[]
   alertRules     AlertRule[]
 }
@@ -106,6 +107,35 @@ model RecoveredPaymentSwitch {
   notes                 String?
 
   shop                   Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, orderId])
+  @@index([shopId, createdAt])
+  @@index([shopId, checkoutToken])
+}
+
+model RecoveredPaymentRetry {
+  id                String   @id @default(cuid())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  shopId            String
+  orderId           String
+  checkoutToken     String?
+
+  gateway           String
+  failedStatus      String?
+  failedKind        String?
+  failedAt          DateTime?
+  failedErrorCode   String?
+
+  successfulStatus  String?
+  successfulKind    String?
+  successfulAt      DateTime?
+
+  retryRecovered    Boolean  @default(false)
+  notes             String?
+
+  shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
 
   @@unique([shopId, orderId])
   @@index([shopId, createdAt])

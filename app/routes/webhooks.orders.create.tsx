@@ -1,7 +1,10 @@
 import type { ActionFunctionArgs } from "@remix-run/node";
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
-import { detectRecoveredPaymentSwitch } from "../services/payment-recovery.server";
+import {
+    detectRecoveredPaymentRetry,
+    detectRecoveredPaymentSwitch,
+} from "../services/payment-recovery.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
     try {
@@ -152,6 +155,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             );
 
             const detected = detectRecoveredPaymentSwitch(transactions);
+            const retryDetected = detectRecoveredPaymentRetry(transactions);
 
             await prisma.recoveredPaymentSwitch.upsert({
                 where: {
@@ -195,6 +199,51 @@ export const action = async ({ request }: ActionFunctionArgs) => {
                     notes: detected.notes,
                 },
             });
+
+            await prisma.recoveredPaymentRetry.upsert({
+                where: {
+                    shopId_orderId: {
+                        shopId: shopRecord.id,
+                        orderId: String(orderPayload.id),
+                    },
+                },
+                update: {
+                    checkoutToken: orderPayload.checkout_token ?? null,
+                    gateway: retryDetected.gateway ?? primaryPaymentMethod,
+                    failedStatus: retryDetected.failedStatus,
+                    failedKind: retryDetected.failedKind,
+                    failedAt: retryDetected.failedAt ? new Date(retryDetected.failedAt) : null,
+                    failedErrorCode: retryDetected.failedErrorCode,
+                    successfulStatus: retryDetected.successfulStatus,
+                    successfulKind: retryDetected.successfulKind,
+                    successfulAt: retryDetected.successfulAt
+                        ? new Date(retryDetected.successfulAt)
+                        : new Date(orderPayload.created_at ?? new Date()),
+                    retryRecovered: retryDetected.retryRecovered,
+                    notes: retryDetected.notes,
+                },
+                create: {
+                    shopId: shopRecord.id,
+                    orderId: String(orderPayload.id),
+                    checkoutToken: orderPayload.checkout_token ?? null,
+                    gateway: retryDetected.gateway ?? primaryPaymentMethod,
+                    failedStatus: retryDetected.failedStatus,
+                    failedKind: retryDetected.failedKind,
+                    failedAt: retryDetected.failedAt ? new Date(retryDetected.failedAt) : null,
+                    failedErrorCode: retryDetected.failedErrorCode,
+                    successfulStatus: retryDetected.successfulStatus,
+                    successfulKind: retryDetected.successfulKind,
+                    successfulAt: retryDetected.successfulAt
+                        ? new Date(retryDetected.successfulAt)
+                        : new Date(orderPayload.created_at ?? new Date()),
+                    retryRecovered: retryDetected.retryRecovered,
+                    notes: retryDetected.notes,
+                },
+            });
+
+            console.log(
+                `Recovered payment retry detected for order ${orderPayload.id}: ${retryDetected.retryRecovered}`,
+            );
 
             console.log(
                 `Recovered payment switch detected for order ${orderPayload.id}: ${detected.switchDetected}`,
