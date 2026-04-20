@@ -29,6 +29,10 @@ uri = "/webhooks/checkouts/update"
 topics = ["orders/create"]
 uri = "/webhooks/orders/create"
 
+[[webhooks.subscriptions]]
+topics = ["order_transactions/create"]
+uri = "/webhooks/order-transactions/create"
+
 [access_scopes]
 scopes = "write_products,read_orders"
 

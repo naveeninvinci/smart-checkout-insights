@@ -26,6 +26,7 @@ model Shop {
   webhookEvents WebhookEvent[]
   checkoutEvents CheckoutEvent[]
   orderEvents    OrderEvent[]
+  recoveredPaymentSwitches RecoveredPaymentSwitch[]
   alertEvents    AlertEvent[]
   alertRules     AlertRule[]
 }
@@ -79,6 +80,36 @@ model OrderEvent {
   shop Shop @relation(fields: [shopId], references: [id], onDelete: Cascade)
 
   @@index([shopId, createdAt])
+}
+
+model RecoveredPaymentSwitch {
+  id                    String   @id @default(cuid())
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  shopId                String
+  orderId               String
+  checkoutToken         String?
+
+  failedGateway         String?
+  failedStatus          String?
+  failedKind            String?
+  failedAt              DateTime?
+  failedErrorCode       String?
+
+  successfulGateway     String
+  successfulStatus      String?
+  successfulKind        String?
+  successfulAt          DateTime?
+
+  switchDetected        Boolean  @default(false)
+  notes                 String?
+
+  shop                   Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, orderId])
+  @@index([shopId, createdAt])
+  @@index([shopId, checkoutToken])
 }
 
 model AlertEvent {

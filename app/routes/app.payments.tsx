@@ -48,6 +48,12 @@ function getPaymentStatus(metric: PaymentMetric) {
     return "Stable";
 }
 
+function shortCheckoutToken(token: string | null) {
+    if (!token || token.trim().length === 0) return "-";
+    if (token.length <= 12) return token;
+    return `${token.slice(0, 8)}...${token.slice(-4)}`;
+}
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
     const { session } = await authenticate.admin(request);
 
@@ -59,6 +65,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         ? await prisma.orderEvent.findMany({
             where: { shopId: shop.id },
             orderBy: { createdAt: "desc" },
+        })
+        : [];
+
+    const recoveredPaymentSwitches = shop
+        ? await prisma.recoveredPaymentSwitch.findMany({
+            where: {
+                shopId: shop.id,
+                switchDetected: true,
+            },
+            orderBy: { createdAt: "desc" },
+            take: 10,
         })
         : [];
 
@@ -162,11 +179,24 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         }
     }
 
+    const recoveredSwitchRows = recoveredPaymentSwitches.map((item) => [
+        item.orderId,
+        shortCheckoutToken(item.checkoutToken),
+        item.failedGateway ?? "-",
+        item.successfulGateway,
+        item.failedErrorCode ?? "-",
+        item.notes ?? "-",
+        item.successfulAt ? new Date(item.successfulAt).toLocaleString() : "-",
+    ]);
+
     let paymentInsight =
         "ℹ Not enough payment data yet to generate a strong payment insight.";
     let paymentInsightTone: "info" | "warning" | "critical" | "success" = "info";
 
-    if (topRevenueMethod && topRevenueMethod.revenueShare >= 70) {
+    if (recoveredPaymentSwitches.length > 0) {
+        paymentInsight = `⚠ ${recoveredPaymentSwitches.length} recovered payment switch event(s) detected recently. At least one order recorded a failed payment attempt before completing with another gateway.`;
+        paymentInsightTone = "warning";
+    } else if (topRevenueMethod && topRevenueMethod.revenueShare >= 70) {
         paymentInsight = `⚠ ${topRevenueMethod.method} is driving ${topRevenueMethod.revenueShare.toFixed(
             1,
         )}% of revenue. Heavy reliance on one payment method may create risk if conversion drops.`;
@@ -203,6 +233,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
                 orders: mostUsedMethod.orders,
             }
             : null,
+        recoveredSwitchRows,
     });
 };
 
@@ -215,6 +246,7 @@ export default function PaymentsInsightsPage() {
         topRevenueMethod,
         topAovMethod,
         mostUsedMethod,
+        recoveredSwitchRows,
     } = useLoaderData<typeof loader>();
 
     return (
@@ -336,6 +368,46 @@ export default function PaymentsInsightsPage() {
                                             "Status",
                                         ]}
                                         rows={paymentRows}
+                                    />
+                                )}
+                            </BlockStack>
+                        </Card>
+                    </Layout.Section>
+                </Layout>
+
+                <Layout>
+                    <Layout.Section>
+                        <Card>
+                            <BlockStack gap="300">
+                                <Text as="h2" variant="headingMd">
+                                    Recovered Payment Switches
+                                </Text>
+
+                                {recoveredSwitchRows.length === 0 ? (
+                                    <Text as="p" tone="subdued">
+                                        No recovered payment switches detected yet.
+                                    </Text>
+                                ) : (
+                                    <DataTable
+                                        columnContentTypes={[
+                                            "text",
+                                            "text",
+                                            "text",
+                                            "text",
+                                            "text",
+                                            "text",
+                                            "text",
+                                        ]}
+                                        headings={[
+                                            "Order",
+                                            "Checkout",
+                                            "Failed Gateway",
+                                            "Completed With",
+                                            "Error Code",
+                                            "Notes",
+                                            "Completed At",
+                                        ]}
+                                        rows={recoveredSwitchRows}
                                     />
                                 )}
                             </BlockStack>

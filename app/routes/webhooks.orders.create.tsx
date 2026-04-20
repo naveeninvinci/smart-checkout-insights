@@ -1,10 +1,11 @@
 import type { ActionFunctionArgs } from "@remix-run/node";
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
+import { detectRecoveredPaymentSwitch } from "../services/payment-recovery.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
     try {
-        const { topic, shop, payload, webhookId } =
+        const { topic, shop, payload, webhookId, admin } =
             await authenticate.webhook(request);
 
         console.log("=== ORDERS/CREATE WEBHOOK RECEIVED ===");
@@ -79,7 +80,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
                     ? orderPayload.total_price.toString()
                     : null,
                 lineItems: simplifiedLineItems as any,
-
                 paymentGatewayNames: paymentGatewayNames as any,
                 primaryPaymentMethod,
                 financialStatus: orderPayload.financial_status ?? null,
@@ -94,7 +94,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
                     ? orderPayload.total_price.toString()
                     : null,
                 lineItems: simplifiedLineItems as any,
-
                 paymentGatewayNames: paymentGatewayNames as any,
                 primaryPaymentMethod,
                 financialStatus: orderPayload.financial_status ?? null,
@@ -102,25 +101,110 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             },
         });
 
-        await prisma.paymentAttemptEvent.create({
-            data: {
-                shopId: shopRecord.id,
-                checkoutToken: orderPayload.checkout_token ?? null,
-                paymentMethod: primaryPaymentMethod,
-                status: "completed",
-                source: "orders/create webhook",
-                notes: `Order ${orderPayload.id} completed`,
-            },
-        });
-
         console.log(`Saved order ${orderPayload.id} to OrderEvent`);
-        console.log(
-            `Payment methods: ${paymentGatewayNames.join(", ") || "Unknown"}`,
-        );
-        console.log(`Primary payment method: ${primaryPaymentMethod}`);
-        console.log(
-            `Financial status: ${orderPayload.financial_status ?? "Unknown"}`,
-        );
+
+        try {
+            const orderGid = `gid://shopify/Order/${orderPayload.id}`;
+
+            const response = await admin.graphql(
+                `#graphql
+        query OrderTransactions($id: ID!) {
+          order(id: $id) {
+            id
+            transactions(first: 50) {
+              gateway
+              formattedGateway
+              status
+              kind
+              createdAt
+              errorCode
+              manualPaymentGateway
+            }
+          }
+        }`,
+                {
+                    variables: { id: orderGid },
+                },
+            );
+
+            const result = await response.json();
+
+            if (result?.errors) {
+                console.error(
+                    `GraphQL order transaction query errors for order ${orderPayload.id}:`,
+                    JSON.stringify(result.errors, null, 2),
+                );
+            }
+
+            const transactions =
+                result?.data?.order?.transactions?.map((tx: any) => ({
+                    gateway: tx.formattedGateway ?? tx.gateway ?? null,
+                    status: tx.status ?? null,
+                    kind: tx.kind ?? null,
+                    createdAt: tx.createdAt ?? null,
+                    errorCode: tx.errorCode ?? null,
+                    manualPaymentGateway: tx.manualPaymentGateway ?? false,
+                })) ?? [];
+
+            console.log(
+                `Fetched ${transactions.length} transaction(s) for order ${orderPayload.id}:`,
+                JSON.stringify(transactions, null, 2),
+            );
+
+            const detected = detectRecoveredPaymentSwitch(transactions);
+
+            await prisma.recoveredPaymentSwitch.upsert({
+                where: {
+                    shopId_orderId: {
+                        shopId: shopRecord.id,
+                        orderId: String(orderPayload.id),
+                    },
+                },
+                update: {
+                    checkoutToken: orderPayload.checkout_token ?? null,
+                    failedGateway: detected.failedGateway,
+                    failedStatus: detected.failedStatus,
+                    failedKind: detected.failedKind,
+                    failedAt: detected.failedAt ? new Date(detected.failedAt) : null,
+                    failedErrorCode: detected.failedErrorCode,
+                    successfulGateway: detected.successfulGateway ?? primaryPaymentMethod,
+                    successfulStatus: detected.successfulStatus,
+                    successfulKind: detected.successfulKind,
+                    successfulAt: detected.successfulAt
+                        ? new Date(detected.successfulAt)
+                        : new Date(orderPayload.created_at ?? new Date()),
+                    switchDetected: detected.switchDetected,
+                    notes: detected.notes,
+                },
+                create: {
+                    shopId: shopRecord.id,
+                    orderId: String(orderPayload.id),
+                    checkoutToken: orderPayload.checkout_token ?? null,
+                    failedGateway: detected.failedGateway,
+                    failedStatus: detected.failedStatus,
+                    failedKind: detected.failedKind,
+                    failedAt: detected.failedAt ? new Date(detected.failedAt) : null,
+                    failedErrorCode: detected.failedErrorCode,
+                    successfulGateway: detected.successfulGateway ?? primaryPaymentMethod,
+                    successfulStatus: detected.successfulStatus,
+                    successfulKind: detected.successfulKind,
+                    successfulAt: detected.successfulAt
+                        ? new Date(detected.successfulAt)
+                        : new Date(orderPayload.created_at ?? new Date()),
+                    switchDetected: detected.switchDetected,
+                    notes: detected.notes,
+                },
+            });
+
+            console.log(
+                `Recovered payment switch detected for order ${orderPayload.id}: ${detected.switchDetected}`,
+            );
+        } catch (transactionError) {
+            console.error(
+                `Failed to analyze transactions for order ${orderPayload.id}:`,
+                transactionError,
+            );
+        }
 
         return new Response("OK", { status: 200 });
     } catch (error) {
