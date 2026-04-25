@@ -1,0 +1,13 @@
+name = "payment-attempt-tracker"
+uid = "2fff079e-2113-463b-31a0-8d8cb6721722bf44f340"
+type = "web_pixel_extension"
+
+runtime_context = "strict"
+
+[settings]
+type = "object"
+
+[settings.fields.accountID]
+name = "Account ID"
+description = "Internal account ID for Smart Checkout Insights"
+type = "single_line_text_field"
